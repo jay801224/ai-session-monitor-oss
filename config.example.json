@@ -1,0 +1,12 @@
+{
+  "_comment": "SECRETS TEMPLATE. Copy this file to config.local.json (which is gitignored) and fill in your Telegram bot token + chat id. config.local.json values override config.json. Never commit real secrets.",
+  "telegram_bot_token": "123456789:AA-your-bot-token-from-@BotFather",
+  "telegram_chat_id": "123456789",
+  "access_token": "set-a-long-random-password-to-protect-the-dashboard-on-your-LAN",
+  "_tg_control_comment": "Set tg_control_enabled=true to ARM the Telegram inline-button mode-switcher (a tap drives a flipped session back to bypass/auto via OS keystrokes). Off by default. SINGLE CONSUMER: enable on exactly ONE machine (the one whose Windows Terminal hosts the sessions), else Telegram getUpdates returns 409 and the loser self-demotes PERMANENTLY. Only telegram_chat_id is authorized to trigger.",
+  "tg_control_enabled": false,
+  "_spoke_comment": "SECOND MACHINE? Both keys below live in the tracked config.json, NOT here — this file's JSON errors are swallowed silently, and a security flag that can silently revert to 'on' is not a security flag. Set `local_machine` to this box's key in the machines registry so its rows are distinguishable in the dashboard and in every push. Set `alerts_enabled: false` on any box that must not push outward — e.g. a work machine whose real repo names must not reach Telegram. Do NOT rely on 'just don't fill in the bot token': copying this file to a second machine brings the token (and tg_control_enabled) with it. Boundary: alerts_enabled does NOT stop office_push.py (separate process, pushes pseudonymised names by design), does NOT stop the office relay pull (inbound only), and does NOT stop LAN exposure via bind_host.",
+  "_office_comment": "Office relay. office_secret = shared HMAC key (secrets.token_hex(32)), SAME value on the pushing machine and here. office_ntfy_topic = a long random ntfy topic (secrets.token_urlsafe(24)) used as a bearer secret. Both flat/top-level.",
+  "office_secret": "REPLACE-with-secrets.token_hex(32)-shared-with-the-other-machine",
+  "office_ntfy_topic": "REPLACE-with-secrets.token_urlsafe(24)"
+}

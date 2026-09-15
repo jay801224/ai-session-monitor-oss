@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dispatch 工作台</title><style>__WORKFLOW_CSS__</style></head><body>
+<header class="topbar"><a id="back" href="/">◈ DISPATCH <span>／ 工作台</span></a><div class="top-actions"><span class="host" id="hostContext">尚未選擇執行主機</span><button id="refresh">重新整理</button></div></header>
+<div class="notices"><div id="status" role="status" aria-live="polite"></div><div id="error" role="alert"></div><button id="retry" hidden>重送上次請求（同一識別碼）</button><button id="resolve" hidden>已核對工作，結束上次請求</button></div>
+<div class="shell"><aside class="nav"><button class="new-work" id="newWork">＋ 新增工作</button><label for="dispatchHost">執行主機</label><select id="dispatchHost" aria-describedby="hostStatus"></select><button id="inspectHost" type="button">檢查主機</button><p id="hostStatus" role="status" class="note">尚未檢查主機</p><h2 class="eyebrow">我的工作</h2><div id="jobs">載入中…</div><p class="nav-note">所有工作經 Dispatch 排隊<br>關閉頁面不代表停止執行。</p><details id="connections"><summary>AI 連線管理</summary><p class="claude">Claude Code</p><p id="claudeAuthState" role="status">尚未檢查登入</p><button type="button" id="authRefresh">檢查登入</button><button type="button" id="claudeLogin">登入／重新登入</button><p class="codex">Codex</p><p id="codexAuthState" role="status">尚未檢查登入</p><button type="button" id="codexAuthRefresh">檢查登入</button><button type="button" id="codexLogin">登入／重新登入</button><p class="note">兩家各自使用獨立設定檔，首次須自行登入。登入將開啟本機終端機，由你完成官方訂閱登入；ASM 不收集帳密。登入成功與派工可用分開確認。</p><p id="authError" role="alert"></p></details></aside>
+<main><section id="empty" class="empty"><span class="empty-mark">◈</span><h1>從一件工作開始</h1><p>選擇專案與主責，讓規劃、實作、審查和交接<br>留在同一個工作台。</p><button id="emptyCreate" class="primary">建立第一件工作</button></section>
+<div id="detail" hidden><header class="work-heading"><div><small id="project"></small><h1 id="title"></h1></div><span id="phase" class="badge"></span></header><div id="meta" class="muted"></div><div class="steps">Plan <span>→</span> Plan 審查 <span>→</span> 主責判斷 <span>→</span> 實作 <span>→</span> PR 審查 <span>→</span> 整合</div>
+<details class="brief"><summary>需求與完成條件</summary><pre id="brief"></pre></details><div id="blocked"></div>
+<section id="operatorQuestions" aria-label="等待你回答的問題"></section><section aria-label="完整派工與回覆"><div id="attempts"></div><div id="messages"></div></section>
+<form id="compose" class="composer"><div class="composer-heading"><span class="provider-dot" aria-hidden="true"></span><strong id="recipient">補充工作指示</strong><small id="inputState"></small></div><label class="sr-only" for="supplement">補充工作指示</label><textarea id="supplement" placeholder="補充需求、修正方向，或說明下一步…"></textarea><div class="compose-bar"><label class="sr-only" for="sendMode">送出方式</label><select id="sendMode"><option value="queued">完成後排隊</option><option value="immediate">立即補充／停止後接續</option></select><button class="primary" id="sendMessage" type="submit">送出 ↑</button></div><p id="composeNote" class="note">立即補充會要求停止後接續；停止未確認前，不會啟動另一個寫檔者。</p></form>
+<details class="native-events"><summary>原生執行進度與事件</summary><p id="nativeState" class="muted">尚無原生執行事件</p><div id="events"></div><button id="moreEvents" hidden>載入後續事件</button></details>
+</div></main>
+<aside class="right"><h2 class="eyebrow">本次分工</h2><div id="roles"><p class="muted">選擇工作後顯示分工</p></div><div class="divider"></div><h2 class="eyebrow">工作與版本</h2><p id="workpath" class="note"></p><p id="changed" class="note"></p><a id="prlink" hidden>開啟草稿 PR ↗</a><details id="operations"><summary>工作流程操作</summary><form id="actionForm">
+<label for="action">操作</label><select id="action">
+<option value="edit">交給 A 繼續實作／修正</option><option value="commit">由主機提交選定檔案</option>
+<option value="review">送審已提交版本</option><option value="evaluate">交回 A 驗證審查意見並提出判斷</option><option value="decide">記錄 A 對審查的判斷</option>
+<option value="takeover">讓另一方接手 A</option><option value="publish">推送並建立／更新草稿 PR</option>
+<option value="ready_merge">記錄 A 的驗證與合併決定</option>
+<option value="merge">執行 A 已決定的合併（檢查 PR 版本與 CI）</option><option value="wait">等待可用審查者</option><option value="change_reviewer">改派可用審查者</option><option value="skip">明確略過當前審核關卡</option>
+<option value="cancel_queued">取消尚未送出的這次執行</option><option value="reconcile">核對不確定的執行／主機操作</option></select>
+<div data-fields="edit"><label for="prompt">交給 A 的工作</label><textarea id="prompt"></textarea></div>
+<div data-fields="commit"><label for="paths">本次要提交的檔案（每行一個）</label><textarea id="paths"></textarea><label for="message">提交訊息（英文前綴主旨＋原因）</label><textarea id="message" placeholder="feat: describe change&#10;&#10;Explain why."></textarea></div>
+<div data-fields="review"><label for="sha">完整 commit SHA</label><input id="sha" placeholder="輸入要送審的固定版本"></div>
+<div data-fields="decide"><label for="findings">審查意見與判斷</label><p class="muted">每行：accepted／rejected／unresolved | 意見 | 依需求判斷的理由。無意見時可留空，但仍需填整體理由。</p><textarea id="findings"></textarea></div>
+<div data-fields="takeover change_reviewer"><label for="route">接手／改派對象</label><select id="route"></select></div>
+<div data-fields="takeover"><label for="remaining">已完成與剩餘工作</label><textarea id="remaining"></textarea></div>
+<div data-fields="ready_merge"><label for="validation">驗證命令與結果</label><textarea id="validation"></textarea></div>
+<div data-fields="decide takeover wait change_reviewer skip ready_merge reconcile cancel_queued"><label for="reason">本次決定的理由與依據</label><textarea id="reason"></textarea></div>
+<div data-fields="skip"><p class="notice">只略過此關，不代表審查通過；後續仍須驗證。下一關缺少審查者時會重新詢問。</p></div>
+<div data-fields="reconcile"><label><input type="checkbox" id="stopped" style="width:auto"> 已依證據確認舊執行停止，不會再寫入</label></div>
+<button class="primary" type="submit">送出此操作</button><p class="muted">操作會檢查目前版本；舊頁面的決定不會覆蓋新的工作狀態。</p></form></details><details><summary>歷次決定</summary><pre id="decisions"></pre></details><div class="divider"></div><h2 class="eyebrow">後續供應者</h2><p class="future agy">● AGY <small>尚未啟用</small></p><p class="future hermes">○ Hermes Agent <small>尚未啟用</small></p></aside></div>
+<dialog id="createDialog"><div class="dialog-heading"><div><small>新的獨立工作</small><h2>選好分工，就從這裡開始</h2></div><button id="closeCreate" aria-label="關閉建立工作">✕</button></div><p class="muted">Dispatch 會檢查遠端基準並建立獨立 worktree；不修改你目前的工作目錄。</p><form id="create">
+<label for="repo">專案</label><select id="repo" required></select>
+<label for="base">起始分支</label><input id="base" value="master" required>
+<label for="requirements">需求與完成條件</label><textarea id="requirements" required placeholder="描述要改什麼，以及如何驗證完成。"></textarea>
+<button type="button" id="refreshModels">更新模型清單</button><p id="modelCatalogStatus" role="status" class="note">正在查詢本機可用模型…</p><label for="roleA">A：主責／實作與模型</label><select id="roleA"></select>
+<label for="roleB">B：Plan 審查與模型</label><select id="roleB"></select>
+<label for="roleC">C：PR 審查與模型</label><select id="roleC"></select>
+<label><input type="checkbox" id="alternatives" style="width:auto"> 允許從已核准的其他選項自動改派</label><p class="muted">預設 Claude Code 主責、Codex 審查，使用可辨識的均衡型模型；沒有明確均衡選項時請自行選擇。接手後會重新檢查審查獨立性。</p>
+<button class="primary" type="submit">建立並排入 Plan 工作</button></form></dialog>
+<script>__WORKFLOW_JS__</script></body></html>

@@ -1,0 +1,11 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('ui/workflows.js','utf8');
+const context={routes:{},name:x=>x,Date};vm.createContext(context);
+vm.runInContext(source.slice(source.indexOf('function executionSummary('),source.indexOf('function renderExecutionFlow(')),context);
+const attempt={role:'B',vendor:'codex',sender:'A',requested_model:'chosen-model'};
+let value=context.executionSummary(attempt,null);
+assert.equal(value.host,'尚無持久化執行位置證據');assert.equal(value.requested,'chosen-model');
+value=context.executionSummary(attempt,{placement:{hostname:'original-host',platform:'Darwin',instance_id:'original-id'},session_id:'session-1',liveness:{state:'dead',reconciliation_needed:true}});
+assert.equal(value.instance,'original-id');assert.equal(value.host,'original-host · Darwin');assert.match(value.warning,/不會自動重跑/);
+assert.equal(value.observed,'尚無實際模型回報');assert.equal(value.origin,'主責 A');
+console.log('PASS: durable host provenance, distinct requested/observed model, dead owner requires reconciliation, unknown history is not invented');

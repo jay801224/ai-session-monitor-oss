@@ -1,0 +1,150 @@
+<!doctype html><html lang="zh-TW"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>授權中心 — AI Monitor</title><style>
+:root{color-scheme:dark}
+body{font:14px/1.5 -apple-system,Segoe UI,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:14px}
+h1{font-size:17px;margin:0 0 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+a{color:#58a6ff;text-decoration:none}
+.meta{color:#8b949e;font-size:12px;margin-bottom:12px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px 14px;margin-bottom:12px}
+.card h2{font-size:13px;font-weight:600;margin:0 0 8px;color:#e6edf3}
+.card[data-cid]>h2{cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none}
+.card[data-cid]>h2::before{content:'▾';color:#8b949e;font-size:10px;flex:none}
+.card.clps>h2::before{content:'▸'}
+.card.clps>*:not(h2){display:none}
+table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+td{padding:4px 4px;border-bottom:1px solid #21262d;vertical-align:top}
+.sub{color:#6e7681}
+.chip{background:#21262d;border-radius:999px;padding:0 8px;font-size:11px;color:#8b949e;white-space:nowrap}
+.acard{border-left:3px solid #d29922}
+.path{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#8b949e;word-break:break-all;margin:4px 0 2px}
+.cmd{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#e6edf3;word-break:break-all;background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:6px 8px;margin:6px 0}
+.abtn{border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-family:inherit;border:1px solid #30363d;background:#21262d;color:#c9d1d9}
+.abtn.ok{color:#3fb950;border-color:#3fb95055}
+.abtn.no{color:#8b949e}
+.abtn:hover{background:#30363d}
+.badge{border-radius:999px;padding:1px 7px;font-size:11px;font-weight:600;white-space:nowrap}
+.err{color:#ff7b72}
+.note{color:#6e7681;font-size:11px;margin-top:8px;opacity:.85}
+</style></head><body>
+<h1>🔑 授權中心 <a href="/" id="back">← dashboard</a></h1>
+<div class="meta" id="head">loading…</div>
+<div id="pending"></div>
+<div id="grants"></div>
+<script>
+window.__CSRF="__CSRF__";
+const TOKEN=new URLSearchParams(location.search).get('token')||'';
+if(TOKEN)document.getElementById('back').href='/?token='+encodeURIComponent(TOKEN);
+function esc(s){return (s==null?'':''+s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function ago(ts){if(!ts)return '—';let s=Math.max(0,Date.now()/1000-ts);if(s<60)return Math.floor(s)+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d';}
+var GATE={mass_delete:['🗑','大量刪除'],install_token:['📦','安裝授權'],native_verify:['🧪','原生驗證']};
+// ✗ 忽略 = localStorage-only dismiss map, keyed repo|gate|ts — NEVER touches the server.
+var DKEY='authz_dismiss';
+function dismissedMap(){try{return JSON.parse(localStorage.getItem(DKEY)||'{}')||{}}catch(e){return {}}}
+function dkey(r){return (r.repo||'')+'|'+(r.gate||'')+'|'+(r.ts||'')}
+function agentBadge(a){return a==='sub'?'<span class="badge" style="color:#d2b8ff;background:#a371f733" title="子 agent 發起">子 agent</span>':'<span class="badge" style="color:#c9d1d9;background:#21262d" title="主 agent 發起">主 agent</span>';}
+var PENDING=[];
+// XSS rule: repo/path/cmd/gate/agent_id/ts are agent-influenced — every
+// interpolation goes through esc(); no raw innerHTML of row data.
+// Hard-deny rows never reach this list (the API excludes them) and no
+// authorize control is synthesized client-side for anything else.
+function renderPending(rows){rows=rows||[];PENDING=rows;
+ var dis=dismissedMap(),hid=0,shown=0,h='';
+ for(var i=0;i<rows.length;i++){var r=rows[i];
+  if(dis[dkey(r)]){hid++;continue;}
+  shown++;
+  var g=GATE[r.gate]||['❔',r.gate||'?'];
+  var cmd=r.cmd||'',cshort=cmd.length>150?cmd.slice(0,150)+'…':cmd;
+  h+='<div class="card acard">'
+   +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+   +'<b>'+g[0]+' '+esc(g[1])+'</b><span class="chip">'+esc(r.gate||'?')+'</span>'
+   +agentBadge(r.agent)
+   +(r.agent_id?'<span class="chip" title="agent id">'+esc(r.agent_id)+'</span>':'')
+   +'<span class="sub" style="margin-left:auto" title="'+esc(r.ts||'')+'">'+ago(r.ts_epoch)+' ago</span></div>'
+   +'<div class="path" title="repo 全路徑">📁 '+esc(r.path||r.repo||'?')+'</div>'
+   +'<div class="cmd" title="'+esc(cmd)+'">'+esc(cshort)+'</div>'
+   +'<div style="display:flex;gap:8px;align-items:center">'
+   +'<button class="abtn ok" data-act="auth" data-i="'+i+'">✓ 授權一次</button>'
+   +'<button class="abtn no" data-act="dismiss" data-i="'+i+'" title="只在此瀏覽器隱藏，不通知 server">✗ 忽略</button>'
+   +'<span class="sub" style="font-size:11px">hash '+esc((r.cmd_hash||'').slice(0,12)||'—')+'</span></div>'
+   +'</div>';}
+ if(!shown)h+='<div class="card"><div class="sub">— 目前沒有待授權的請求（近 30 分鐘無被攔截的可授權指令）—</div></div>';
+ if(hid)h+='<div class="note">已忽略 '+hid+' 筆（僅本瀏覽器）· <a href="#" data-act="undis">清除忽略</a></div>';
+ return h;}
+var GSTATE={awaiting:['⏳ 已授權待消費','#3fb950','#2ea04322'],consumed:['✓ 已消費','#8b949e','#6e768122'],expired:['⌛ 過期未消費','#e3b341','#d2992222']};
+function renderGrants(rows){rows=rows||[];
+ var h='<div class="card" data-cid="authz:grants"><h2>🎫 已授權狀態（最近 '+rows.length+' 筆）</h2>';
+ if(!rows.length)h+='<div class="sub">— 尚無授權紀錄 —</div>';
+ else h+='<table>'+rows.map(function(g){
+  var gg=GATE[g.gate]||['❔',g.gate||'?'];
+  var st=GSTATE[g.state]||[esc(g.state||'?'),'#8b949e','#6e768122'];
+  return '<tr><td class="sub" style="white-space:nowrap" title="'+esc(g.ts||'')+'">'+(esc((g.ts||'').slice(11,19))||'—')+'</td>'
+   +'<td style="white-space:nowrap">'+gg[0]+' '+esc(gg[1])+'</td>'
+   +'<td style="word-break:break-all" title="'+esc(g.path||'')+'">'+esc(g.repo||'?')+'</td>'
+   +'<td><span class="badge" style="color:'+st[1]+';background:'+st[2]+'">'+st[0]+'</span></td>'
+   +'<td class="sub" style="white-space:nowrap">hash '+esc((g.cmd_hash||'').slice(0,12)||'—')+'</td></tr>';}).join('')+'</table>';
+ h+='<div class="note">對照 server 端 authz_grants.jsonl：待消費＝grant 檔仍在且 10 分鐘內；已消費＝檔已被 hook 取走；過期＝檔逾時未被消費。</div></div>';
+ return h;}
+// ---- collapsible titled cards: stable data-cid keys (never title text — it
+// carries a changing count). State is localStorage-only; pending cards have no
+// h2 title and are never collapsible (safety: requests must stay visible).
+var CKEY='authz_clps';
+function clpsMap(){try{return JSON.parse(localStorage.getItem(CKEY)||'{}')||{}}catch(e){return {}}}
+function applyCollapse(root){var m=clpsMap(),cs=(root||document).querySelectorAll('.card[data-cid]');
+ for(var i=0;i<cs.length;i++){var c=cs[i];c.classList.toggle('clps',!!m[c.dataset.cid]);}}
+document.addEventListener('click',function(e){
+ var h=e.target.closest('.card[data-cid]>h2');if(!h)return;
+ var c=h.parentElement,m=clpsMap();
+ if(m[c.dataset.cid])delete m[c.dataset.cid];else m[c.dataset.cid]=1;
+ localStorage.setItem(CKEY,JSON.stringify(m));
+ c.classList.toggle('clps',!!m[c.dataset.cid]);
+});
+var DATA=null,timer=null;
+function paint(){if(!DATA)return;
+ document.getElementById('pending').innerHTML=renderPending(DATA.pending||[]);
+ document.getElementById('grants').innerHTML=renderGrants(DATA.grants||[]);
+ applyCollapse(document.getElementById('grants'));
+ var n=(DATA.pending||[]).length;
+ document.title=(n?('('+n+') '):'')+'授權中心 — AI Monitor';
+ document.getElementById('head').innerHTML=(DATA.error?'<span class="err">'+esc(DATA.error)+'</span> · ':'')
+  +n+' 筆待授權 · 更新 '+esc(DATA.generated||'')+' · 15s 自動更新（分頁可見時）';
+}
+// Energy: poll ONLY while the tab is visible (visibilitychange), 15s cadence.
+async function tick(){
+ if(document.hidden)return;
+ try{DATA=await (await fetch('/api/authz/pending'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''))).json();}
+ catch(e){document.getElementById('head').innerHTML='<span class="err">fetch failed: '+esc(''+e)+'</span>';clearTimeout(timer);timer=setTimeout(tick,15000);return}
+ paint();
+ clearTimeout(timer);timer=setTimeout(tick,15000);
+}
+document.addEventListener('visibilitychange',function(){if(document.hidden){clearTimeout(timer);}else{tick();}});
+document.getElementById('pending').addEventListener('click',async function(e){
+ var t=e.target.closest('[data-act]');if(!t)return;
+ var act=t.dataset.act;
+ if(act==='undis'){e.preventDefault();localStorage.removeItem(DKEY);paint();return;}
+ var r=PENDING[+t.dataset.i];if(!r)return;
+ if(act==='dismiss'){var m=dismissedMap();m[dkey(r)]=1;localStorage.setItem(DKEY,JSON.stringify(m));paint();return;}
+ if(act!=='auth')return;
+ // confirm names all five elements before any POST (repo full path / gate
+ // Chinese name / cmd excerpt <=150 / main-vs-sub agent / binding semantics).
+ var g=GATE[r.gate]||['❔',r.gate||'?'];
+ var cmd=(r.cmd||'').slice(0,150);
+ var msg='確認授權一次？\n\n'
+  +'· Repo（全路徑）：'+(r.path||r.repo||'?')+'\n'
+  +'· Gate：'+g[1]+'（'+(r.gate||'?')+'）\n'
+  +'· 指令摘錄：'+cmd+'\n'
+  +'· 發起端：'+(r.agent==='sub'?'子 agent':'主 agent')+(r.agent_id?'（'+r.agent_id+'）':'')+'\n\n'
+  +'僅放行與此指令一致者（hash 綁定），10 分鐘內有效，一次性。';
+ if(!confirm(msg))return;
+ t.disabled=true;
+ try{
+  var res=await fetch('/api/ops/authorize'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''),
+   {method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.__CSRF},
+    body:JSON.stringify({id:r.id||'',gate:r.gate||''})});
+  var j=await res.json();
+  alert((j.ok?'✓ ':'✗ ')+(j.msg||(j.ok?'granted':'failed')));
+ }catch(err){alert('✗ '+err);}
+ tick();
+});
+tick();
+</script></body></html>

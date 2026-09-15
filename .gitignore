@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local secrets and per-machine overrides. config.json is tracked (it is the
+# template a reader edits); anything ending .local.json never is.
+*.local.json
+
+# Runtime state and caches. The tool is read-only with respect to your sessions,
+# but it keeps its own state here — never commit it.
+_state/
+
+# Preview / verification leftovers — review artifacts + CLI-bridge manifests never ship
+report/
+.playwright-mcp/
+/*.png

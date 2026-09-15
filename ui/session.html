@@ -1,0 +1,112 @@
+<!doctype html><html lang="zh-TW"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Session — AI Monitor</title><style>
+:root{color-scheme:dark}
+body{font:14px/1.5 -apple-system,Segoe UI,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:14px;box-sizing:border-box;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column}
+h1{font-size:17px;margin:0 0 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+a{color:#58a6ff;text-decoration:none}
+.meta{color:#8b949e;font-size:12px;margin-bottom:12px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px 14px;margin-bottom:12px}
+.card h2{font-size:13px;font-weight:600;margin:0 0 8px;color:#e6edf3}
+table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+td{padding:4px 4px;border-bottom:1px solid #21262d;vertical-align:top}
+td.l{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.r{text-align:right;white-space:nowrap}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.running{background:#3fb950;animation:live 2.4s ease-in-out infinite}
+.idle{background:#d29922}.stopped{background:#6e7681}
+.waiting{background:#a371f7;animation:live 1.6s ease-in-out infinite}
+@keyframes live{0%,100%{box-shadow:0 0 0 2px #3fb95033}50%{box-shadow:0 0 0 5px #3fb95011}}
+.chip{background:#21262d;border-radius:999px;padding:0 8px;font-size:11px;color:#8b949e}
+.tool{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#e6edf3;word-break:break-all;max-width:80ch}
+.txt{color:#8b949e;font-size:12px;white-space:pre-wrap;word-break:break-word;max-width:80ch}
+.tok{color:#d2b8ff}
+.err{color:#ff7b72}
+#transcript{display:block;flex:1 1 auto;min-height:180px;overflow:hidden}
+#transcriptbody{max-height:42dvh;overflow-y:auto;overscroll-behavior:contain;padding-right:4px}
+#subsbody{max-height:180px;overflow-y:auto;overscroll-behavior:contain}
+.turn{border-left:3px solid #30363d;padding:7px 9px;margin:0 0 8px;background:#0d1117;border-radius:0 7px 7px 0}
+.turn.user{border-color:#58a6ff}.turn.assistant{border-color:#e6edf3}.turn.tool{border-color:#8156d8}
+.turnhead{font-size:11px;color:#8b949e;display:flex;gap:7px;align-items:center}.turntext{white-space:pre-wrap;word-break:break-word;margin-top:3px;max-width:80ch}
+.more{color:#8b949e;text-align:center;font-size:12px;padding:5px}
+@media(min-height:760px){#transcriptbody{max-height:62dvh}}
+@media(max-width:520px){body{padding:10px}#transcriptbody{max-height:38dvh}.card{padding:10px}}
+</style></head><body>
+<h1>🔎 <span id="title">session</span> <a href="/" id="back">← dashboard</a></h1>
+<div class="meta" id="head">loading…</div>
+<div class="card" id="live" style="display:none"><h2>▶ 現在在做</h2><div id="livebody"></div></div>
+<div class="card" id="transcript"><h2>Transcript <span class="chip" id="transcriptn"></span></h2><div id="transcriptbody"></div></div>
+<div class="card" id="subs" style="display:none"><h2>🔬 Subagents <span class="chip" id="subn"></span></h2><div id="subsbody"></div></div>
+<script>
+const SID="__SID__";
+const TOKEN=new URLSearchParams(location.search).get('token')||'';
+if(TOKEN)document.getElementById('back').href='/?token='+encodeURIComponent(TOKEN);
+function esc(s){return (s==null?'':''+s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+let transcriptTurns=[],transcriptCursor='',transcriptHasMore=false,transcriptBusy=false,transcriptStarted=false;
+function renderTranscript(turns){
+ const box=document.getElementById('transcriptbody'),card=document.getElementById('transcript');
+ card.style.display='';box.replaceChildren();document.getElementById('transcriptn').textContent=turns.length+' turns';
+ if(transcriptHasMore){const more=document.createElement('div');more.className='more';more.textContent='Scroll to load earlier turns';box.appendChild(more);}
+ turns.forEach(function(t){const row=document.createElement('div'),head=document.createElement('div'),text=document.createElement('div');
+  row.className='turn '+(t.role||'assistant');head.className='turnhead';text.className='turntext';
+  const role=t.role==='tool'?(t.done?'tool done':'tool running'):(t.role||'assistant');
+  head.textContent=role+(t.tool?' · '+t.tool:'')+(t.target?' · '+t.target:'')+(t.truncated?' · truncated':'');
+  text.textContent=t.text||'';row.appendChild(head);if(t.text)row.appendChild(text);box.appendChild(row);
+ });
+ if(!turns.length){const empty=document.createElement('div');empty.className='txt';empty.textContent='No readable transcript turns yet.';box.appendChild(empty);}
+}
+async function loadTranscript(older){
+ if(transcriptBusy||(!older&&transcriptStarted&&transcriptTurns.length))return;
+ if(older&&!transcriptHasMore)return;transcriptBusy=true;
+ const box=document.getElementById('transcriptbody'),beforeTop=box.scrollTop,beforeHeight=box.scrollHeight||0;
+ try{let url='/api/session/transcript?id='+encodeURIComponent(SID)+(TOKEN?'&token='+encodeURIComponent(TOKEN):'');
+  if(older&&transcriptCursor)url+='&cursor='+encodeURIComponent(transcriptCursor);
+  const d=await (await fetch(url)).json();if(d.error)throw Error(d.error);
+  transcriptTurns=older?(d.turns||[]).concat(transcriptTurns):(d.turns||[]);transcriptCursor=d.cursor||'';transcriptHasMore=!!d.has_more;
+  renderTranscript(transcriptTurns);if(older)box.scrollTop=(box.scrollHeight||0)-beforeHeight+beforeTop;
+ }catch(e){const card=document.getElementById('transcript');card.style.display='';document.getElementById('transcriptbody').textContent='Transcript fetch failed: '+e;}
+ finally{transcriptBusy=false;}
+}
+document.getElementById('transcriptbody').addEventListener('scroll',function(){if(this.scrollTop<80)loadTranscript(true);});
+function dot(s){return '<span class="dot '+esc(s)+'"></span>'}
+function ago(ts){if(!ts)return '';let s=Math.max(0,Date.now()/1000-ts);if(s<60)return Math.floor(s)+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d';}
+function tok(n){return n==null?'—':(n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':''+n)}
+function liveHtml(v,src){if(!v)return '<div class="txt">（無資料）</div>';let h='';
+ if(v.tool)h+='<div class="tool">'+(v.tool_done?'☑':'⚙')+' '+esc(v.tool)+(v.target?' → '+esc(v.target):'')+(v.tool_done?' <span class="chip">done</span>':' <span class="chip" style="color:#3fb950">running</span>')+'</div>';
+ if(v.text)h+='<div class="txt">💬 '+esc(v.text)+'</div>';
+ if(!v.tool&&!v.text)h+='<div class="txt">（tail 內無 tool/文字事件）</div>';
+ return h;}
+async function tick(){
+ let d;
+ try{d=await (await fetch('/api/session?id='+encodeURIComponent(SID)+(TOKEN?'&token='+encodeURIComponent(TOKEN):''))).json()}
+ catch(e){document.getElementById('head').innerHTML='<span class="err">fetch failed: '+esc(''+e)+'</span>';setTimeout(tick,15000);return}
+ const poll=(d.poll_seconds||60)*1000;
+ if(d.error){document.getElementById('head').innerHTML='<span class="err">'+esc(d.error)+'</span> · '+esc(d.session_id||SID);setTimeout(tick,poll);return}
+ document.getElementById('title').textContent=(d.source==='codex'?'🟦 ':'🟧 ')+(d.label||SID);
+ document.title=(d.label||SID)+' — AI Monitor';
+ let h=dot(d.status)+esc(d.status)+(d.wait_kind?' <span style="color:#a371f7">('+esc(d.wait_kind)+')</span>':'')
+  +' · <span class="chip">'+esc((d.session_id||'').slice(0,8))+'</span>'
+  +(d.pmode&&d.pmode!=='default'?' · '+esc(d.pmode):'')
+  +(d.model?' · '+esc(d.model):'')
+  +(d.branch?' · ⎇ '+esc(d.branch):'')
+  +(d.ctx!=null?' · ctx '+d.ctx+'%':'')
+  +' · <span class="tok">out '+tok(d.out_tokens)+(d.sub_out_tokens?' (+'+tok(d.sub_out_tokens)+' subagents)':'')+'</span>'
+  +(d.turns!=null?' · '+d.turns+' turns':'')+(d.total_tokens!=null?' · total '+tok(d.total_tokens):'')
+  +' · last '+ago(d.ts)+' ago · updated '+esc(d.generated);
+ document.getElementById('head').innerHTML=h;
+ document.getElementById('live').style.display='';
+ document.getElementById('livebody').innerHTML=liveHtml(d.live,d.source);
+ if(!transcriptStarted){transcriptStarted=true;loadTranscript(false);}
+ const subs=d.subagents||[];const sc=document.getElementById('subs');
+ if(d.source==='claude'){sc.style.display='';document.getElementById('subn').textContent=subs.length;
+  document.getElementById('subsbody').innerHTML=subs.length?('<table>'+subs.map(n=>'<tr><td>'+dot(n.status)+'</td>'
+   +'<td class="l" title="'+esc(n.agent_type||'')+'">'+esc(n.label)+(n.model?' <span class="chip">'+esc(n.model)+'</span>':'')
+   +(n.deep?((n.tool?'<div class="tool" style="font-size:11px">'+(n.tool_done?'☑':'⚙')+' '+esc(n.tool)+(n.target?' → '+esc(n.target):'')+'</div>':'')
+   +(n.text?'<div class="txt" style="font-size:11px">💬 '+esc(n.text)+'</div>':'')):'<div class="txt" style="font-size:11px">（歷史 agent，未深解析）</div>')
+   +'</td><td class="r tok">'+tok(n.out_tokens)+'</td><td class="r">'+(n.events!=null?n.events+' ev':'—')
+   +'</td><td class="r" title="'+esc(n.last)+'">'+ago(n.ts)+'</td></tr>').join('')+'</table>')
+   :'<div class="txt">— 此 session 沒有 subagent —</div>';}
+ setTimeout(tick,poll);
+}
+tick();
+</script></body></html>

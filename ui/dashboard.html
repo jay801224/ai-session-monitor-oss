@@ -1,0 +1,1051 @@
+<!doctype html><html lang="zh-TW"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Session Monitor</title><style>
+:root{color-scheme:dark;--p1-ink:#E6EDF3;--p1-claude:#F0883E;--p1-codex:#58A6FF;--p1-batch:#8156D8}
+body{font:14px/1.5 -apple-system,Segoe UI,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:14px}
+h1{font-size:18px;margin:0 0 4px}
+.meta{color:#8b949e;font-size:12px;margin-bottom:14px;display:flex;flex-wrap:wrap;gap:0 4px}
+.alertbar{border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:14px;font-weight:600;display:flex;align-items:center;gap:10px;line-height:1.3}
+.alertbar.ok{background:#0f2a17;border:1px solid #2ea04326;color:#3fb950}
+.alertbar.warn{background:#2a1f0a;border:1px solid #d2992233;color:#e3b341}
+.alertbar.crit{background:#2a1115;border:1px solid #f8514933;color:#ff7b72;animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 #f8514900}50%{box-shadow:0 0 0 4px #f8514922}}
+.alertbar .chips{margin-left:auto;display:flex;gap:6px;font-weight:500;font-size:12px}
+.alertbar .chip{background:#ffffff14;border-radius:999px;padding:1px 9px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px 14px}
+.card h2{font-size:13px;font-weight:600;margin:0 0 10px;display:flex;justify-content:space-between;align-items:center;color:#e6edf3}
+.card h2 .sub{font-size:11px;background:#21262d;border-radius:999px;padding:1px 8px}
+.card[data-cid]>h2{cursor:pointer;justify-content:flex-start;gap:6px;user-select:none}
+.card[data-cid]>h2::before{content:'▾';color:#8b949e;font-size:10px;flex:none}
+.card.clps>h2::before{content:'▸'}
+.card[data-cid]>h2 .sub{margin-left:auto}
+.card.clps>*:not(h2){display:none}
+table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+td{padding:4px 4px;border-bottom:1px solid #21262d;vertical-align:middle}
+/* max-width was a fixed 200px, which at 1920 (5 cards abreast) made the row 413px wide
+   inside a 339px card: the sha link and the age column were pushed outside the card and
+   clipped. width:100% + max-width:0 makes this the elastic column — the fixed-width
+   siblings take their natural width and the label ellipsises into whatever is left. */
+td.l{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.ctx{text-align:right;white-space:nowrap}
+/* A bar track is a div with no intrinsic width, so under the rule above it is not one
+   of the "fixed-width siblings" — the elastic label takes everything and the track
+   collapses to 0, silently blanking every bar chart (measured: 8px cell, 0px track).
+   A declared min-width is what makes it a real sibling. A percentage cannot work here:
+   it would resolve against the cell, which is the thing being sized. */
+.bartrack{min-width:min(700px,52vw)}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle;flex:none}
+.running{background:#3fb950;animation:live 2.4s ease-in-out infinite}
+.idle{background:#d29922}
+.stopped{background:#6e7681;box-shadow:inset 0 0 0 1px #8b949e55}
+.waiting{background:#a371f7;animation:waitp 1.6s ease-in-out infinite}
+.stale{background:#484f58;box-shadow:inset 0 0 0 1px #d2992288}
+@keyframes live{0%,100%{box-shadow:0 0 0 2px #3fb95033}50%{box-shadow:0 0 0 5px #3fb95011}}
+@keyframes waitp{0%,100%{box-shadow:0 0 0 2px #a371f744}50%{box-shadow:0 0 0 6px #a371f711}}
+.tbadge{background:#21262d;color:#8b949e;border-radius:999px;padding:0 6px;font-size:11px}
+.pbtn{background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:2px 10px;font-size:12px;cursor:pointer}
+.pbtn:hover{background:#30363d}
+/* KB 快速開圖的連結晶片：沿用 .pbtn 的形狀，但它是 <a> 不是 button */
+.kblink{display:inline-block;background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:2px 10px;font-size:12px;text-decoration:none}
+.kblink:hover{background:#30363d;text-decoration:underline}
+.kblink.dead{color:#8b949e;border-style:dashed;cursor:not-allowed}
+.pbtn.launch:hover{background:#1f6feb;color:#fff;border-color:#58a6ff;box-shadow:0 0 0 3px #58a6ff22;transform:translateY(-1px)}
+.pbtn.xclose{color:#ff7b72}
+.ckgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.ckcard{display:block;background:#161b22;border:1px solid #30363d;border-radius:12px;padding:12px 14px;text-decoration:none;color:inherit;transition:border-color .2s,transform .1s;position:relative;overflow:hidden}
+.ckcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--edge,#30363d)}
+.ckcard.running{--edge:#3fb950}.ckcard.waiting{--edge:#a371f7}.ckcard.idle{--edge:#d29922}
+.ckcard:hover{border-color:var(--p1-codex);transform:translateY(-1px)}
+.ckhd{display:flex;align-items:center;gap:7px;font-size:14px;color:var(--p1-ink);margin-bottom:6px}
+.ckhd b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cksrc{margin-left:auto;font-size:15px}.cksrc.claude{color:var(--p1-claude)}.cksrc.codex{color:var(--p1-codex)}
+.ckmeta{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;min-height:2px}
+.cktool{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#e6edf3;word-break:break-all;line-height:1.4}
+.cktxt{color:#8b949e;font-size:12px;margin-top:5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ckft{margin-top:8px;display:flex;justify-content:flex-end}
+.ckbanner{background:#2a1f0a;border:1px solid #d2992233;color:#e3b341;border-radius:8px;padding:6px 12px;margin-bottom:10px;font-size:12px}
+.ckcc{font-family:ui-monospace,Consolas,monospace;color:var(--p1-ink);background:#8156D822}
+.cur{font-size:11px;color:#58a6ff;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
+#grid2{margin-top:14px}
+.sub{color:#6e7681}
+.note{color:#6e7681;font-size:11px;margin-top:8px;opacity:.85}
+.kpi{display:flex;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.kpi span{background:#21262d;border-radius:4px;padding:2px 8px;font-size:12px}
+@media(max-width:520px){
+ body{padding:10px}
+ .grid,.ckgrid{grid-template-columns:minmax(0,1fr);gap:10px}
+ .card{min-width:0}
+ /* rows become a grid here, so the track is already full-width; keeping the 220px
+    floor would push the row past the card and reopen the narrow-viewport overflow */
+ .bartrack{min-width:0}
+ .card>div[style*="display:flex"]{flex-wrap:wrap}
+ .card>div[style*="display:flex"]>*{min-width:0;overflow-wrap:anywhere}
+ table,tbody,tr,td{display:block;width:100%}
+ tr{display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"dot label ctx" "dot meta hooks";gap:0 8px;padding:7px 0;border-bottom:1px solid #21262d;align-items:center}
+ td{border:0;padding:0}
+ tr>td:nth-child(1){grid-area:dot}
+ tr>td:nth-child(2){grid-area:label;max-width:none;font-size:13px;white-space:normal}
+ tr>td:nth-child(3){grid-area:ctx;text-align:right;font-weight:600}
+ tr>td:nth-child(4){grid-area:hooks;text-align:right}
+ tr>td:nth-child(5){display:none}
+ tr>td:nth-child(6){grid-area:meta;font-size:11px;color:#6e7681}
+ #deletions tr{display:block;padding:7px 0}
+ #deletions tr>td{display:block;width:100%;min-width:0;text-align:left}
+ #deletions tr>td:nth-child(5),#deletions tr>td:nth-child(7){text-align:right}
+ #deletions tr>td:nth-child(6),#deletions .tbadge{white-space:normal!important;overflow-wrap:anywhere}
+ .viewtog{margin-left:0;max-width:100%;flex-wrap:wrap;overflow:visible;border-radius:8px}
+ .viewtog button{flex:1 1 30%;min-width:0;padding-inline:8px}
+ .alertbar .chips{flex-wrap:wrap}
+}
+:root{--st-running:#3fb950;--st-idle:#d29922;--st-waiting:#a371f7;--st-stopped:#6e7681}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px}
+.chip{background:#161b22;border:1px solid #30363d;color:#6e7681;border-radius:999px;padding:4px 11px;font-size:12px;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px}
+.chip.on{color:#e6edf3}
+ .chip[role=button]:focus-visible,.card[data-cid]>h2:focus-visible{outline:2px solid #58a6ff;outline-offset:2px}
+.chip .led{width:7px;height:7px;border-radius:50%;background:#30363d;flex:none}
+.chip.on .led{background:#3fb950}
+.viewtog{margin-left:auto;display:flex;border:1px solid #30363d;border-radius:999px;overflow:hidden}
+.viewtog button{background:#0d1117;color:#8b949e;border:0;padding:5px 13px;font-size:12px;cursor:pointer;font-family:inherit}
+.viewtog button.on{background:#21262d;color:#e6edf3}
+.opbtn{background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:1px 8px;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap}
+.opbtn:hover{background:#30363d}
+.opbtn.kill{color:#ff7b72;border-color:#f8514955}
+.opbtn.run{color:#3fb950;border-color:#3fb95055}
+#tooltip{position:fixed;z-index:20;max-width:260px;background:#e6edf3;color:#0d1117;border-radius:6px;padding:5px 8px;font-size:12px;line-height:1.35;box-shadow:0 6px 20px #0008;pointer-events:auto;transition:opacity .15s ease}
+#tooltip[hidden]{display:none}
+@media(prefers-reduced-motion:reduce){#tooltip{transition:none}}
+#office{background:radial-gradient(ellipse 90% 70% at 50% 42%,#16203033 0%,transparent 65%),linear-gradient(180deg,#0b1017 0%,#0f1622 55%,#131d2c 100%);border:1px solid #21262d;border-radius:12px;padding:12px;min-height:50vh}
+#office.office2-host{padding:0;border:0;background:none;min-height:0;overflow:hidden;border-radius:12px}
+#office2frame{display:block;width:100%;border:0;border-radius:12px;background:#0b1017}
+.signal-desk{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.40fr);gap:12px;align-items:start}
+.signal-floor{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;align-items:start;position:relative;border:2px solid #2b3a4a;border-radius:12px;overflow:hidden;background:radial-gradient(120% 80% at 50% 0%,#18273a 0%,#0e1826 55%,#0a121c 100%)}
+.signal-rail{display:grid;min-width:0;gap:12px;align-content:start}
+.signal-zone{background:transparent;border:0;border-radius:0;padding:12px;position:relative}.signal-zone::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--zone-accent);opacity:.65}.signal-queue,.office-pool,.signal-inspector{background:#0d1117aa;border:1px solid #30363d;border-radius:10px;padding:10px}
+.signal-zone[data-zone="working"]{--zone-accent:#3fb950;border-right:2px solid #24323f;background:linear-gradient(180deg,rgba(63,185,80,.06),transparent 42%)}.signal-zone[data-zone="standby"]{--zone-accent:#d29922;background:linear-gradient(180deg,rgba(210,153,34,.06),transparent 42%)}.signal-zone[data-zone="stopped"]{--zone-accent:#8b949e;border-top:2px solid #24323f;background:linear-gradient(180deg,rgba(139,148,158,.05),transparent 42%)}
+.signal-zone[data-zone="stopped"]{grid-column:1/-1}
+.signal-zone h2,.signal-queue h2,.office-pool h2,.signal-inspector h2{font-size:12px;margin:0 0 8px;color:var(--p1-ink);display:flex;align-items:center;gap:6px}.signal-zone h2{color:var(--zone-accent)}.signal-zone h2{font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 10px;border-left:3px solid var(--zone-accent);background:rgba(255,255,255,.04);border-radius:0 6px 6px 0;box-shadow:0 1px 0 rgba(0,0,0,.3)}
+.signal-zone h2 .sub,.signal-queue h2 .sub,.office-pool h2 .sub{margin-left:auto}
+.signal-zone h2 .sub{background:var(--zone-accent);color:#0d1117}
+.signal-desks{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;min-height:152px;align-content:start}.signal-zone[data-zone="working"] .signal-desks:has(.office-empty){min-height:64px}
+.office-empty{color:#8b949e;font-size:12px;display:flex;align-items:center;min-height:112px}
+.signal-zone[data-zone="working"] .office-empty{min-height:48px;padding:4px 0}
+.desk{position:relative;min-width:0;min-height:150px;text-align:center;border:0;border-radius:0;background:transparent;padding:10px 7px;cursor:pointer}
+.desk::after{content:"";position:absolute;left:50%;bottom:14px;width:58px;height:11px;transform:translateX(-50%);border-radius:50%;background:radial-gradient(ellipse,rgba(0,0,0,.55),transparent 72%);filter:blur(1px);pointer-events:none;z-index:0}
+.signal-zone[data-zone="stopped"] .desk{filter:grayscale(.55) brightness(.8);opacity:.82}
+.desk.signal-flip-moving{transition:transform .32s cubic-bezier(.2,.8,.2,1);will-change:transform}
+.leg{transform-box:fill-box;transform-origin:50% 0}
+.desk.signal-flip-moving .legL{animation:walkstep .26s ease-in-out infinite}
+.desk.signal-flip-moving .legR{animation:walkstep .26s ease-in-out infinite .13s}
+@keyframes walkstep{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(-2px) rotate(-16deg)}}
+.desk[aria-pressed="true"]{outline:2px solid var(--batch);outline-offset:2px}
+.desk:focus-visible{outline:2px solid #58a6ff;outline-offset:2px}
+.signal-parent-id{display:inline-flex;align-items:center;justify-content:center;min-width:28px;border-radius:999px;background:var(--batch);color:#0d1117;font-size:11px;font-weight:800;line-height:18px}
+.signal-route{margin-top:3px;font-size:10px;color:#8b949e;min-height:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.child-bag{display:flex;justify-content:center;flex-wrap:wrap;gap:3px;min-height:18px;margin-top:3px}
+.child-token{border:1px solid #a371f755;background:#a371f722;border-radius:999px;color:#d2b8ff;padding:0 5px;font-size:10px;line-height:16px}
+.child-unknown{color:#8b949e;font-size:10px;line-height:16px}
+.signal-queue{margin-top:0}.queue-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}.queue-ticket{border-left:3px solid var(--batch);background:#161b22;border-radius:6px;padding:7px 8px;font-size:12px}.queue-ticket b{display:block;color:var(--p1-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.queue-ticket .sub{display:block;margin-top:3px;font-size:11px}.queue-actions{margin-top:8px}
+.office-pool{margin-top:0}.pool-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}.pool-source{background:#161b22;border-radius:6px;padding:7px 8px;font-size:12px}.pool-source b{display:block;color:var(--p1-ink)}.pool-source .sub{display:block;margin-top:3px;font-size:11px}
+.signal-inspector{position:sticky;top:10px;min-height:220px}.signal-inspector dl{margin:0;display:grid;gap:8px}.signal-inspector dt{font-size:10px;color:#8b949e}.signal-inspector dd{margin:1px 0 0;color:#e6edf3;overflow-wrap:anywhere}.signal-inspector .child-list{display:flex;flex-wrap:wrap;gap:4px}
+@media(max-width:820px){.signal-desk{grid-template-columns:1fr}.signal-inspector{position:static}.signal-floor{grid-template-columns:1fr}.signal-zone[data-zone="stopped"]{grid-column:auto}}
+.desk.t0{--body:#3d444d;--skin:#656c76;--hair:#262c33}
+.desk.t1{--body:#4d555f;--skin:#737b85;--hair:#30363d}
+.desk.t2{--body:#586069;--skin:#828b96;--hair:#3a414a}
+.person{position:relative;display:inline-block}
+.desk-head{position:absolute;left:50%;top:18px;width:34px;height:34px;transform:translateX(-50%);border-radius:50%;object-fit:cover;object-position:center 30%;pointer-events:none;z-index:2;background:#30363d;overflow:hidden;color:transparent;font-size:0}
+.desk[data-vendor]{--vendor-ring:#8b949e}.desk[data-vendor="cc"]{--vendor-ring:#f0883e}.desk[data-vendor="codex"]{--vendor-ring:#58a6ff}.desk[data-vendor="hermes"]{--vendor-ring:#a371f7}.desk[data-vendor="antigravity"]{--vendor-ring:#3fb950}.desk[data-vendor="copilot"]{--vendor-ring:#39c5cf}.desk[data-vendor] .desk-head{box-shadow:0 0 0 2px var(--vendor-ring),0 0 12px var(--vendor-ring)}
+.ch{display:block;margin:0 auto;overflow:visible;transform:rotate(var(--tilt,0deg))}
+.shadow{fill:#000;opacity:.22}.floorglow{fill:var(--batch);opacity:.24;transition:fill .4s,opacity .4s}
+.body{transform-box:fill-box;transform-origin:46px 74px}
+.arm{transform-box:fill-box;transform-origin:0% 50%}
+.legs{opacity:1}
+.pip{fill:var(--p1-ink);opacity:.55} .screen{fill:var(--p1-ink);opacity:.32}
+.desk[data-st=stopped] .person{opacity:.4;filter:grayscale(1)}
+.desk[data-st=stopped] .body{transform:rotate(6deg)}
+.halo{position:absolute;left:50%;top:30px;width:62px;height:62px;margin-left:-31px;border-radius:50%;border:2px solid var(--p1-ink);opacity:0;transform:scale(.5);pointer-events:none}
+.followers{position:absolute;left:6px;bottom:54px;width:96px;height:54px;pointer-events:none;z-index:0}
+.mini{position:absolute;bottom:0;transform:scale(.62);transform-origin:bottom center;opacity:.95}
+.mini-head{position:absolute;left:2px;top:12px;width:15px;height:15px;border-radius:50%;object-fit:cover;object-position:center 30%;z-index:2;box-shadow:0 0 0 1.5px #30363d;background:#30363d}
+.mini:nth-child(1){left:0;bottom:4px}.mini:nth-child(2){left:18px;bottom:0}.mini:nth-child(3){left:36px;bottom:6px}.mini:nth-child(4){left:54px;bottom:2px}
+.mini:nth-child(2){animation-delay:.15s}.mini:nth-child(3){animation-delay:.3s}.mini:nth-child(4){animation-delay:.45s}
+.hcard{position:absolute;left:50%;bottom:100%;transform:translate(-50%,-4px);width:150px;background:#161b22;border:1px solid #30363d;border-radius:9px;padding:5px 8px 6px;text-align:left;opacity:0;transition:opacity .25s;box-shadow:0 4px 14px #0008;z-index:3;pointer-events:none}
+.hcard.show{opacity:1}
+.hcard::after{content:"";position:absolute;left:50%;top:100%;margin-left:-5px;border:5px solid transparent;border-top-color:#161b22}
+.acttag{display:inline-block;padding:0 6px;border-radius:999px;font-size:9px;font-weight:700;color:#0d1117;line-height:14px;margin-bottom:3px}
+.acttag.fix{background:#ff8a5c}.acttag.review{background:#56d4dd}.acttag.plan{background:#58a6ff}.acttag.search{background:#b0c45a}.acttag.task{background:#f778ba}
+.hcard .task{font-size:10px;color:#c9d1d9;line-height:1.3;max-height:26px;overflow:hidden}
+.hcard .meta{display:flex;justify-content:space-between;margin-top:4px;font-size:9px;color:#8b949e;font-variant-numeric:tabular-nums}
+.hcard .meta b{color:#c9d1d9;font-weight:600}
+.hcard .bar{height:3px;border-radius:2px;background:#21262d;margin-top:4px;overflow:hidden}
+.hcard .fill{height:100%;background:var(--p1-ink)}
+.labelrow{display:flex;align-items:center;gap:5px;justify-content:center;margin-top:2px;font-size:10px;line-height:1.4;flex-wrap:wrap}
+.modechip{display:inline-flex;align-items:center;gap:3px;padding:0 6px;border-radius:999px;font-weight:600;border:1px solid #30363d;background:#21262d;color:#c9d1d9;white-space:nowrap}
+.modechip.bypass{color:#ff9b9b;border-color:#b9525233}
+.modechip.plan{color:#9db4ff;border-color:#3b5bdb33}
+.modechip.auto{color:#8b949e}
+.srcname{color:#8b949e;white-space:nowrap;max-width:96px;overflow:hidden;text-overflow:ellipsis}
+.dsubs{font-size:10px;color:#d2b8ff;height:13px;line-height:13px}
+@media(prefers-reduced-motion:reduce){.desk *,.person,.mini,.desk.signal-flip-moving{animation:none!important;transition:none!important}.desk.signal-flip-moving{transform:none!important;will-change:auto}.desk[data-st=idle] .body{transform:translate(0,-11px)}.desk[data-st=waiting] .halo{opacity:.5;transform:scale(1)}.desk[data-st=waiting] .qmark{opacity:1}}
+@media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;animation-iteration-count:1!important}}
+body.paused .desk *,body.paused .mini,body.paused .person,body.paused .dot,body.paused .alertbar{animation-play-state:paused!important}
+</style></head><body>
+<h1>🛰️ AI Session Monitor <span class="sub" style="font-weight:400;font-size:12px">read-only · zero-token</span></h1>
+<div id="alertbar" class="alertbar ok" hidden></div>
+<div class="meta" id="meta">loading…</div>
+<div class="toolbar" id="toolbar"></div>
+<div class="grid" id="grid1"></div>
+<div class="grid" id="grid2"></div>
+<div id="tooltip" role="tooltip" hidden></div>
+<p><a href="/workflows" id="workflow-entry">派工與審核工作台 →</a></p>
+<div id="cockpit" style="display:none"></div>
+<div id="office" style="display:none"></div>
+<div id="services" style="display:none"></div>
+<div id="recap" style="display:none"></div>
+<div id="deletions" style="display:none"></div>
+<script>
+window.__CSRF="__CSRF__";
+const TOKEN=new URLSearchParams(location.search).get('token')||'';  // page-global; some helpers re-shadow locally
+const SRC=[['claude','🟧 Claude Code'],['codex','🟦 Codex'],['hermes','🔮 Hermes'],['antigravity','🟩 Antigravity'],['copilot','🤖 Copilot']];
+const KIND={claude:'CLI',codex:'CLI',antigravity:'IDE',copilot:'IDE',hermes:'本地'};
+const OSI={win:'🪟',mac:'🍎',linux:'🐧'};
+function dot(s){return '<span class="dot '+s+'"></span>'}
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+const tooltip=document.getElementById('tooltip');
+let tooltipTrigger=null,tooltipShowTimer=null,tooltipHideTimer=null;
+function clearTooltipTimers(){clearTimeout(tooltipShowTimer);clearTimeout(tooltipHideTimer);tooltipShowTimer=null;tooltipHideTimer=null;}
+function closeTooltip(){clearTooltipTimers();if(tooltipTrigger)tooltipTrigger.removeAttribute('aria-describedby');tooltip.hidden=true;tooltipTrigger=null;}
+function placeTooltip(trigger){const r=trigger.getBoundingClientRect();tooltip.style.left=Math.max(8,r.left+r.width/2)+'px';tooltip.style.top=Math.max(8,(r.bottom||r.top+r.height)+8)+'px';tooltip.style.transform='translateX(-50%)';}
+function openTooltip(trigger){const message=trigger&&trigger.dataset?trigger.dataset.tip:'';if(!message)return;clearTooltipTimers();if(tooltipTrigger&&tooltipTrigger!==trigger)tooltipTrigger.removeAttribute('aria-describedby');tooltipTrigger=trigger;tooltip.textContent=message;tooltip.hidden=false;trigger.setAttribute('aria-describedby','tooltip');placeTooltip(trigger);}
+function queueTooltip(trigger){clearTooltipTimers();tooltipShowTimer=setTimeout(function(){openTooltip(trigger)},1500);}
+function queueTooltipClose(){clearTimeout(tooltipShowTimer);clearTimeout(tooltipHideTimer);tooltipHideTimer=setTimeout(closeTooltip,700);}
+function tooltipTarget(el){return el&&el.closest?el.closest('[data-tip]'):null;}
+document.addEventListener('mouseenter',function(e){const trigger=tooltipTarget(e.target);if(trigger)queueTooltip(trigger);},true);
+document.addEventListener('mouseleave',function(e){const trigger=tooltipTarget(e.target);if(!trigger)return;const next=e.relatedTarget;if(next&&(trigger.contains(next)||tooltip.contains(next)))return;queueTooltipClose();},true);
+document.addEventListener('focus',function(e){const trigger=tooltipTarget(e.target);if(trigger)queueTooltip(trigger);},true);
+document.addEventListener('blur',function(e){if(tooltipTarget(e.target))queueTooltipClose();},true);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeTooltip();});
+tooltip.addEventListener('mouseenter',function(){clearTimeout(tooltipHideTimer);});
+tooltip.addEventListener('mouseleave',queueTooltipClose);
+function ago(ts){if(!ts)return '';let s=Math.max(0,Date.now()/1000-ts);if(s<60)return Math.floor(s)+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d';}
+function pmBadge(m){if(!m||m==='default')return '';
+ var map={bypassPermissions:['🔓bypass','#f85149'],plan:['📋plan','#58a6ff'],acceptEdits:['✎auto','#d29922']};
+ var x=map[m];if(!x)return '';
+ return ' <span style="color:'+x[1]+';font-size:11px" title="permission mode">'+x[0]+'</span>';}
+// Absolute per-turn context, in tokens. Deliberately NOT folded into
+// ctxBadge: that one is occupancy of the model's window and answers "will
+// this overflow"; with a 1M window a 306k turn is 31% (grey) yet is
+// re-read in full on every turn. Thresholds come from 14 days of measured
+// data on this fleet -- per-turn median 306k, p75 436k, p90 602k, and the
+// 400k-700k band alone carries 41.4% of all cache-read volume.
+function tokBadge(n){if(n==null)return '';var bg=n>700000?'#f8514922':n>400000?'#d2992222':'#6e768122';var fg=n>700000?'#ff7b72':n>400000?'#e3b341':'#8b949e';return '<span title="每輪重讀的 context 絕對量（成本軸，與左側視窗占用率不同）" style="background:'+bg+';color:'+fg+';border-radius:999px;padding:1px 6px;margin-left:4px;font-weight:600">'+fmtTok(n)+'</span>';}
+function ctxBadge(p){var bg=p>85?'#f8514922':p>60?'#d2992222':'#6e768122';var fg=p>85?'#ff7b72':p>60?'#e3b341':'#8b949e';var pl=p>85?'animation:pulse 2s ease-in-out infinite;':'';return '<span title="context window used" style="background:'+bg+';color:'+fg+';border-radius:999px;padding:1px 7px;font-weight:600;'+pl+'">'+p+'%</span>';}
+function hookBadge(h){if(!h||!h.hits)return '';var ok=h.hits-(h.cancelled||0)-(h.errors||0);var p=[];
+ if(ok>0)p.push('<span style="color:#3fb950" title="hook success">✓'+ok+'</span>');
+ if(h.cancelled)p.push('<span style="color:#d29922" title="cancelled / blocked / timeout">⊘'+h.cancelled+'</span>');
+ if(h.errors)p.push('<span style="color:#f85149" title="error e.g. script not found">✗'+h.errors+'</span>');
+ return '<span class="sub" style="white-space:nowrap">'+p.join(' ')+'</span>'}
+function urgency(r){let u=0;if(r.ctx!=null)u+=r.ctx>85?300:r.ctx>60?100:0;if(r.hooks&&r.hooks.cancelled)u+=200;if(r.status==='stopped')u+=50;if(r.status==='running')u+=10;return u;}
+function machineBadge(key){var M=(LAST&&LAST.machines)||{};var m=M[key];
+ if(!m)return '';
+ return '<span title="來源機器" style="background:'+m.bg+';color:'+m.fg+';border-radius:999px;padding:0 7px;font-size:10px;font-weight:700;white-space:nowrap">'+(m.icon||'')+' '+esc(m.label)+'</span> ';}
+// Badge key. A RELAYED row names its own machine; a LOCAL row does not — r.machine IS the
+// remote-row predicate that sessHref uses right below — so this box declares who it is via
+// /api/status local_machine. Never stamp machine onto local rows just to fix a badge: it
+// silently kills the drill-down link here and the deep link in monitor.py's alerts.
+// "Local" is not "from this box": claude_projects may include a mounted root owned by
+// another machine (~/.claude-mac/projects), whose rows arrive with os='mac' and no
+// machine. Claim a row for this box only when its OS is ours, else a synced Mac session
+// would wear the Windows badge. Mirrors monitor.py _machine_key.
+function machKey(r){if(r.machine)return r.machine;
+ var lo=(LAST&&LAST.local_os)||'';
+ if(r.os&&lo&&r.os!==lo)return r.os;
+ return ((LAST&&LAST.local_machine)||'')||r.os;}
+function sessHref(r){if(!r.session_id||r.machine)return null; // remote rows have no local files to drill into
+ return '/session/'+encodeURIComponent(r.session_id)+(TOKEN?'?token='+encodeURIComponent(TOKEN):'');}
+function kindBadge(k){var v=KIND[k];if(!v)return '';
+ return ' <span class="tbadge" data-agent-kind="'+v+'" title="agent 型態（'+k+'）">'+v+'</span>';}
+function rowsTbl(rows,src){if(!rows.length)return '<div class="sub">— no recent sessions —</div>';
+ return '<table>'+rows.map(r=>'<tr><td>'+dot(r.status)+'</td><td class="l">'+
+ machineBadge(machKey(r))+esc(r.label)+kindBadge(r.src||src)+
+ (r.project&&r.project!==r.label?' <span style="background:#1f6feb22;color:#58a6ff;border-radius:999px;padding:0 6px;font-size:10px" title="project">📁 '+esc(r.project)+'</span>':'')+
+ pmBadge(r.pmode)+
+ (r.model?' <span style="background:#a371f733;color:#d2b8ff;border-radius:999px;padding:0 6px;font-size:10px" title="model">'+esc(r.model)+'</span>':'')+
+ (r.status==='waiting'?' <span style="color:#a371f7;font-weight:600;font-size:11px" title="Claude 停下來等你">'+({question:'❓ 在問你問題',plan_review:'📋 等你審核 Plan'}[r.wait_kind]||'💬 停下等你')+'</span>':'')+
+ (r.status==='stale'?' <span style="color:#d29922;font-weight:600;font-size:11px" title="遠端機器失聯，狀態可能不準（非即時）">⚠ 連線中斷'+(r.stale_age?' · '+Math.round(r.stale_age/60)+'m 前':'')+'</span>':'')+
+ (r.tasks?' <span class="tbadge" title="open tasks">▤'+r.tasks+'</span>':'')+
+ (r.subagents?' '+(sessHref(r)?'<a href="'+sessHref(r)+'">':'')+'<span class="tbadge" style="color:#d2b8ff;background:#a371f733" title="active subagents — 點開看 subagent 樹">🔬'+r.subagents+'</span>'+(sessHref(r)?'</a>':''):'')+
+ (r.task_current?'<div class="cur" title="'+esc(r.task_current)+'">▶ '+esc(r.task_current)+'</div>':'')+'</td><td class="ctx">'+
+ (r.ctx!=null?ctxBadge(r.ctx):'')+(r.ctx_tokens!=null?tokBadge(r.ctx_tokens):'')+'</td><td class="ctx">'+hookBadge(r.hooks)+'</td><td class="sub">'+
+ (sessHref(r)?'<a href="'+sessHref(r)+'" title="開啟 session 深視圖">'+esc(r.sub)+'</a>':esc(r.sub))+
+ '</td><td class="sub" title="'+esc(r.last)+'">'+ago(r.ts)+'</td></tr>').join('')+'</table>'}
+function pctBar(p){if(p==null)return '';var col=p>=80?'#3fb950':p>=40?'#d29922':'#6e7681';
+ return '<span title="checklist done" style="display:inline-flex;align-items:center;gap:5px;justify-content:flex-end">'+
+  '<span style="display:inline-block;width:42px;height:5px;border-radius:3px;background:#21262d;overflow:hidden">'+
+  '<span style="display:block;height:100%;width:'+p+'%;background:'+col+'"></span></span>'+
+  '<span class="sub" style="font-variant-numeric:tabular-nums">'+p+'%</span></span>';}
+function prioBadge(prio){var m=['fix','decision','feat',''][prio];var col=['#ff7b72','#58a6ff','#8b949e',''][prio];
+ return m?'<span style="color:'+col+';font-size:10px;font-weight:700;letter-spacing:.3px" title="handle-first rank (filename prefix)">'+m.toUpperCase()+'</span> ':'';}
+var UNIT_TIP='分子=已勾完的 unit 數 / 分母=該類 unit 總數（unit = multi 票的一個 Gap，或一張單主題票）';
+function bucketRow(emoji,label,b){if(!b||!b.total)return '';
+ var p=Math.round(100*b.done/b.total);
+ return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0">'+
+  '<span style="min-width:62px;font-size:12px">'+emoji+' '+label+'</span>'+
+  '<span class="sub" style="min-width:46px;font-variant-numeric:tabular-nums;cursor:help" title="'+UNIT_TIP+'">'+b.done+'/'+b.total+'</span>'+
+  pctBar(p)+'</div>';}
+function bucketSummary(bk){if(!bk)return '';
+ var inner=bucketRow('🐛','Bug',bk.bug)+bucketRow('✨','需求',bk.req)+bucketRow('❓','未分類',bk.uncat);
+ return inner?'<div style="margin:2px 0 9px;border-bottom:1px solid #21262d;padding-bottom:7px">'+inner+'</div>':'';}
+var OWNER_META={global:['🌐','全域設定'],app:['📦','app'],project:['📁','專案設定'],skill:['🧩','skill'],hook:['🪝','hook'],mixed:['🔀','混合'],untagged:['❓','未分類']};
+function ownerRow(key,g){if(!g||!g.n)return '';
+ var m=OWNER_META[key]||['•',key];
+ var bar=g.total?pctBar(Math.round(100*g.done/g.total)):'<span class="sub" style="font-size:11px">無 checklist</span>';
+ var inf=g.inferred?' <span class="sub" style="color:#6e7681;font-style:italic;cursor:help" title="'+g.inferred+' 張非作者標註，由 owner 欄位/檔名推斷（advisory）">~'+g.inferred+' 推斷</span>':'';
+ return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0">'+
+  '<span style="min-width:78px;font-size:12px">'+m[0]+' '+m[1]+'</span>'+
+  '<span class="sub" style="min-width:34px;font-variant-numeric:tabular-nums;cursor:help" title="此層目前 open 的票數">'+g.n+' 票</span>'+
+  bar+inf+'</div>';}
+function ownerSummary(og,pc){if(!og)return '';
+ var order=['global','app','project','skill','hook','mixed','untagged'];
+ var inner=order.map(function(k){return ownerRow(k,og[k])}).join('');
+ if(!inner)return '';
+ var plat='';
+ if(pc){var parts=[];if(pc.ios)parts.push('📱ios '+pc.ios);if(pc.android)parts.push('🤖and '+pc.android);if(pc.cross)parts.push('🔁cross '+pc.cross);if(pc.pc)parts.push('🖥pc/未標 '+pc.pc);
+  plat=parts.length?'<div class="sub" style="margin-top:5px;font-size:11px">平台：'+parts.join(' · ')+'</div>':'';}
+ return '<div style="margin:2px 0 9px;border-bottom:1px solid #21262d;padding-bottom:7px">'+
+   '<div class="sub" style="font-size:11px;margin-bottom:3px">問題分層（優先序 global→app→hook）</div>'+inner+plat+'</div>';}
+function clsChip(r){if(!r.cls)return '';var m=OWNER_META[r.cls]||['•',r.cls];
+ var c=r.csrc==='inferred'?'#6e7681':r.csrc==='untagged'?'#8b949e':'#58a6ff';
+ var t=(r.csrc==='inferred'?'推斷分類':r.csrc==='untagged'?'未標註':'作者標註：'+m[1])+(r.plat&&r.plat!=='pc'?' · '+r.plat:'');
+ return '<span class="tbadge" style="color:'+c+';cursor:help" title="'+t+'">'+m[0]+(r.csrc==='inferred'?'~':'')+'</span> ';}
+function handoffTbl(rows){if(!rows.length)return '<div class="sub">— none open —</div>';
+ return '<table>'+rows.map(r=>'<tr><td class="l">'+clsChip(r)+prioBadge(r.prio)+esc(r.label)+
+  (r.tbd?' <span class="tbadge" title="no date / unscheduled">TBD</span>':'')+'</td><td class="ctx">'+
+  pctBar(r.pct)+'</td><td class="sub" title="'+esc(r.last)+'">'+ago(r.ts)+'</td></tr>').join('')+'</table>';}
+function renderAlert(d){
+ let stuck=0,hot=0,hookerr=0,wait=0;
+ for(const [k] of SRC)for(const r of (d[k]||[])){if(r.status==='waiting')wait++;if(r.status==='stopped')stuck++;if(r.ctx!=null&&r.ctx>85)hot++;if(r.hooks&&r.hooks.cancelled)hookerr+=r.hooks.cancelled;}
+ const authz=d.authz_pending||0;  // B7: pending one-shot authorization gates (crit)
+ const bar=document.getElementById('alertbar');const parts=[];
+ if(authz)parts.push('🔑 '+authz+' 筆待授權');
+ if(wait)parts.push('⏳ '+wait+' 在等你');if(hot)parts.push(hot+' near-full ctx');if(stuck)parts.push(stuck+' quiet');if(hookerr)parts.push(hookerr+' hook ⚠');
+ let cls='ok',msg='✓ All clear — nothing needs you',chips='';
+ if(parts.length){const crit=hot||wait||authz;cls=crit?'crit':'warn';msg=(crit?'⚠ ':'• ')+'Attention: '+parts.join(' · ');chips='<span class="chips">'+parts.map(p=>'<span class="chip">'+p+'</span>').join('')+'</span>';}
+ bar.className='alertbar '+cls;bar.hidden=false;bar.innerHTML='<span>'+msg+'</span>'+chips;
+ document.title=(parts.length?('('+parts.length+') '):'')+'AI Monitor';
+}
+// ---- prefs (localStorage): hidden sources + view mode ----
+const DEF={hidden:{hermes:1,antigravity:1,copilot:1},view:'text',collapsed:{},signalDeskOrdinals:{},signalDeskNextOrdinal:1,signalDeskSelected:''};
+let PREFS=Object.assign({},DEF,JSON.parse(localStorage.getItem('aimon')||'{}'));
+PREFS.hidden=Object.assign({},DEF.hidden,PREFS.hidden||{});
+PREFS.collapsed=Object.assign({},PREFS.collapsed||{});
+PREFS.signalDeskOrdinals=Object.assign({},PREFS.signalDeskOrdinals||{});
+PREFS.signalDeskNextOrdinal=Math.max(1,Number(PREFS.signalDeskNextOrdinal)||1);
+const _qv=new URLSearchParams(location.search).get('view');if(_qv==='cockpit'||_qv==='office'||_qv==='text'||_qv==='services'||_qv==='recap'||_qv==='deletions')PREFS.view=_qv;
+// Never throw out of a render. savePrefs is reached from signalDeskOrdinals on
+// the render path, and PREFS.signalDeskOrdinals grows one key per session seen
+// with no eviction — so a QuotaExceededError here would propagate out of render
+// and re-throw every poll, permanently blanking the page. Losing a preference
+// write is recoverable; losing the UI is not.
+function savePrefs(){try{localStorage.setItem('aimon',JSON.stringify(PREFS))}catch(e){}}
+// ---- collapsible cards: data-cid is a STABLE view-prefixed id (never the
+// title text — titles carry changing counts). Cards re-render via innerHTML
+// each cycle, so applyCollapse(root) re-applies state after every render.
+function applyCollapse(root){var m=PREFS.collapsed||{};var cs=(root||document).querySelectorAll('.card[data-cid]');
+ for(var i=0;i<cs.length;i++){var c=cs[i],h=c.querySelector(':scope>h2'),closed=!!m[c.dataset.cid];c.classList.toggle('clps',closed);if(h){h.setAttribute('role','button');h.tabIndex=0;h.setAttribute('aria-expanded',closed?'false':'true');}}}
+function enableKeyboardControls(root){var cs=(root||document).querySelectorAll('[data-src],[data-del],[data-rcp],[data-svc="localonly"],[data-svc="susponly"],[data-svc="refresh"],[data-svc="unlock"]');
+ for(var i=0;i<cs.length;i++){var c=cs[i],toggle=c.dataset.src!=null||c.dataset.del==='exec'||c.dataset.del==='repo'||c.dataset.rcp==='win'||c.dataset.rcp==='mac'||c.dataset.rcp==='office'||c.dataset.svc==='localonly'||c.dataset.svc==='susponly'||c.dataset.svc==='unlock';c.setAttribute('role','button');c.tabIndex=0;if(toggle)c.setAttribute('aria-pressed',c.classList.contains('on')?'true':'false');else c.removeAttribute('aria-pressed');}}
+document.addEventListener('keydown',function(e){if(e.key!=='Enter'&&e.key!==' ')return;var c=e.target.closest('.card[data-cid]>h2,[data-src],[data-del],[data-rcp],[data-svc]');if(!c)return;
+ if(c.dataset.svc&&!/^(localonly|susponly|refresh|unlock)$/.test(c.dataset.svc))return;e.preventDefault();c.click();});
+document.addEventListener('click',function(e){
+ var h=e.target.closest('.card[data-cid]>h2');if(!h)return;
+ var c=h.parentElement,cid=c.dataset.cid;
+ PREFS.collapsed=PREFS.collapsed||{};
+ if(PREFS.collapsed[cid])delete PREFS.collapsed[cid];else PREFS.collapsed[cid]=1;
+ savePrefs();c.classList.toggle('clps',!!PREFS.collapsed[cid]);h.setAttribute('aria-expanded',PREFS.collapsed[cid]?'false':'true');
+});
+let LAST=null,pollMs=60000;
+function renderToolbar(d){
+ let h=SRC.map(([k,title])=>'<span class="chip '+(PREFS.hidden[k]?'':'on')+'" data-src="'+k+'"><span class="led"></span>'+title+' <span class="sub">'+((d&&d[k]||[]).length)+'</span></span>').join('');
+ h+='<a class="chip" style="text-decoration:none" href="/authz'+(TOKEN?'?token='+encodeURIComponent(TOKEN):'')+'" target="_blank" title="授權中心 — 待授權的一次性放行請求"><span class="led" style="background:'+((d&&d.authz_pending)?'#f85149':'#30363d')+'"></span>🔑 授權'+((d&&d.authz_pending)?' <span class="sub" style="color:#ff7b72">'+d.authz_pending+'</span>':'')+'</a>';
+ h+='<a class="chip" style="text-decoration:none" href="/hooks'+(TOKEN?'?token='+encodeURIComponent(TOKEN):'')+'" target="_blank" title="Hook 稽核 — 各家 AI 的 hook 行數/檔數/event 種類與列管狀態"><span class="led" style="background:#30363d"></span>🪝 Hook</a>';
+ h+='<span class="viewtog"><button data-v="text" class="'+(PREFS.view==='text'?'on':'')+'">📋 列表</button><button data-v="cockpit" class="'+(PREFS.view==='cockpit'?'on':'')+'">🔍 深視圖</button><button data-v="office" class="'+(PREFS.view==='office'?'on':'')+'">🏢 辦公室</button><button data-v="services" class="'+(PREFS.view==='services'?'on':'')+'">🔌 服務</button><button data-v="recap" class="'+(PREFS.view==='recap'?'on':'')+'">📊 回顧</button><button data-v="deletions" class="'+(PREFS.view==='deletions'?'on':'')+'">🗑 刪除</button></span>';
+ document.getElementById('toolbar').innerHTML=h;
+ enableKeyboardControls(document.getElementById('toolbar'));
+}
+function applyTooltipLabels(root){
+ var tips={text:'切換到列表',cockpit:'切換到深視圖',office:'切換到辦公室',services:'Switch to services view',recap:'Switch to recap view',deletions:'Switch to deletion history'};
+ var views=root.querySelectorAll('[data-v]');
+ for(var i=0;i<views.length;i++)views[i].dataset.tip=tips[views[i].dataset.v]||'';
+ var buttons=root.querySelectorAll('.pbtn[data-preset]');
+ for(var j=0;j<buttons.length;j++){var b=buttons[j];b.removeAttribute('title');if(b.dataset.idx!=null&&b.dataset.idx!==''){b.dataset.tip='Retry agent';b.setAttribute('aria-label','Retry agent');}else{b.dataset.tip='在這組設定的專案目錄，一次開好整組 agent';b.setAttribute('aria-label','一鍵開工');b.classList.add('launch');}}
+}
+function spawnChip(s){var m={launching:['#d29922','⏳ launching'],bound:['#3fb950','✓ bound'],launched:['#58a6ff','▲ launched'],retryable:['#f85149','↻ retryable'],refused:['#f85149','✗ refused']};
+ var x=m[s]||['#8b949e',s];return '<span style="color:'+x[0]+';font-size:11px;font-weight:600;white-space:nowrap">'+x[1]+'</span>';}
+// #5 共享 codex 橋：兩端都連上同一個 app-server 才派得動（實測：turn 事件不跨 app-server）。
+// 這張卡從外面看，不持 token、不做協定呼叫——所以它數得出幾條連線，讀不出是誰。
+function codexBridgeCard(d){
+ const b=d.codex_bridge;if(!b)return '';
+ const up=b.listening&&b.readyz==='200';
+ const dot=up?'#3fb950':(b.listening?'#d29922':'#8b949e');
+ const label=up?'橋已啟用':(b.listening?'port 有人占，但 /readyz 不是 200':'橋沒在跑');
+ let peers;
+ if(!b.listening)peers='';
+ else if(b.peers===null||b.peers===undefined)peers='<div class="note" style="color:#d29922">連線數讀不到（不等於 0）</div>';
+ else peers='<div class="sub">挂著 '+b.peers+' 個 peer</div>';
+ return '<div class="card" data-cid="text:codexbridge"><h2>⬜ codex 橋<span class="sub">:'+b.port+'</span></h2>'+
+  '<div class="sub"><span style="color:'+dot+';font-weight:600">● '+esc(label)+'</span></div>'+peers+
+  '<div class="note">兩端要連同一個 app-server：對面用 <code>codex --remote ws://127.0.0.1:'+b.port+'</code> 加入 · ASM 只看，不啟停、不派工、不持 token</div></div>';
+}
+// #13 反向通道：codex 做完了沒有 —— 由 monitor 背景執行緒定時問，不是有人手動跑。
+// 沒設定就整張不畫（不是每台機器都有這條橋）；設了卻跑不動要吵——靜静地失效跟「今天沒事」在畫面上長得一模一樣。
+const _cpCol={done:'#3fb950',pending:'#d29922',overdue:'#f85149','wrong-branch':'#f85149','base-invalid':'#f85149',rejected:'#8b949e','un-judged':'#8b949e'};
+function codexPollCard(d){
+ const p=d.codex_poll;if(!p)return '';
+ const ls=p.ledger_summary||null,c=(ls&&ls.counts)||{};
+ const order=['done','pending','overdue','wrong-branch','base-invalid','rejected','un-judged'];
+ let ks=order.filter(k=>c[k]);Object.keys(c).forEach(k=>{if(order.indexOf(k)<0)ks.push(k);});
+ const chips=ks.map(k=>'<span style="color:'+(_cpCol[k]||'#8b949e')+';font-weight:600">'+esc(k)+' '+c[k]+'</span>').join(' · ');
+ const t=p.ts_epoch||0;
+ // 新鮮度是狀態契約，不是裝飾。迴圈死掉、或狀態檔寫不進去，都只會讓這個檔案停止更新——
+ // 舊的 ok:true 會一直留著，畫面上跟「今天很平靜」長得一模一樣（codex review F1）。
+ const iv=p.interval_seconds||300, age=t?(Date.now()/1000-t):null;
+ const stale=(age===null)||(age>iv*2+60);
+ const head='<div class="sub">上次自動輪詢 '+(t?ago(t)+'前':'—')+' · 每 '+iv+'s 一次</div>';
+ const staleMsg=(age===null)?'狀態檔沒有時間戳，輪詢健康狀態未知'
+   :'上次成功紀錄是 '+ago(t)+'前，超過兩個間隔 —— 迴圈可能死了，或狀態檔寫不進去';
+ const sw=stale?'<div class="note" style="color:#f85149">⚠ 輪詢已過期：'+staleMsg+'</div>':'';
+ const err=(p.ok===false)?'<div class="note" style="color:#f85149">⚠ 輪詢沒跑成：'+esc(p.error||('exit '+p.rc))+'</div>':'';
+ // 沒有 correlation key 的派工，poller 判它 base-invalid；這裡不能靜靜地把它濾掉（F2）。
+ const uk=(ls&&ls.unkeyed)?'<div class="note" style="color:#f85149">⚠ '+ls.unkeyed+' 筆派工沒有 correlation key，無法關聯，不在下表內</div>':'';
+ let tbl;
+ if(!ls)tbl='<div class="note" style="color:#f85149">讀不到派工單 '+esc(p.ledger||'')+'</div>';
+ else if(!ls.rows.length)tbl='<div class="sub">派工單裡還沒有可判定的派工</div>';
+ // reason 跟分支同一格：它自己一欄時被擠到十幾個字寬，一列拉成一屏。
+ else tbl='<table>'+ls.rows.map(r=>'<tr><td class="ctx"><span style="color:'+(_cpCol[r.state]||'#8b949e')+';font-weight:600">'+esc(r.state)+'</span></td><td class="l">'+esc(r.branch||'(無分支)')+(r.reason?'<div class="sub" style="white-space:normal">'+esc(r.reason)+'</div>':'')+'</td></tr>').join('')+'</table>';
+ return '<div class="card" data-cid="text:codexpoll"><h2>🔁 codex 回報<span class="sub">'+(ls?ls.total:0)+' 筆派工</span></h2>'+head+sw+err+uk+(chips?'<div class="sub">'+chips+'</div>':'')+tbl+
+  '<div class="note">判定由 codex_dispatch_poll.py 做，monitor 只負責定時叫它 · 比對的 repo：'+esc(p.repo||'')+'</div></div>';
+}
+// KB today: sits to the right of the Handoff card. Its own on-demand endpoint (the main poll
+// must not shell out to git in another repo), cached server-side, fail-closed.
+let _kbToday=null,_kbBusy=false,_kbError='';
+function kbTodayCard(){
+ let body;
+ if(_kbBusy)body='<div class="sub">讀取中…</div>';
+ else if(_kbError)body='<div class="sub">讀不到 KB — <button class="pbtn" data-kb="retry">重試</button></div>';
+ else if(!_kbToday)body='<div class="sub">—</div>';
+ else if(!_kbToday.available)body='<div class="note">KB 未設定或不可讀'+(_kbToday.note?' — '+esc(_kbToday.note):'')+'<br>在 config.json 設 kb_dir 指向知識庫 repo</div>';
+ else body=kbNums()+kbLinks();
+ return '<div class="card" data-cid="text:kbtoday"><h2>📚 KB 今日</h2>'+body+'</div>';
+}
+// 今天實際動了什麼（owner 2026-07-28 指定的三個數字），資料源／卡片收在後面一行當背景值。
+// bug 只算 type:bug 且 status:done —— 真的關掉的，不是碰過的。
+function kbNum(n,label,cls){return '<div><b style="font-size:20px"'+(cls?' class="'+cls+'"':'')+'>'+
+ (n||0)+'</b> <span class="sub">'+label+'</span></div>';}
+function kbNums(){const k=_kbToday;
+ return '<div style="display:flex;gap:16px;align-items:baseline;padding:2px 0;flex-wrap:wrap">'+
+   kbNum(k.bugs_done,'bug 解掉')+kbNum(k.handoffs,'handoff')+kbNum(k.plans,'plan')+'</div>'+
+   '<div class="sub" style="padding-bottom:2px">新增 '+(k.sources||0)+' 資料源 · '+(k.cards||0)+
+   ' 卡片'+(k.tickets_open?' · 目前 '+k.tickets_open+' 張票未結':'')+'</div>'+
+   '<div class="note">最後更新 '+(k.last_update?ago(k.last_update):'—')+
+   ' · 三個數字讀票卡 frontmatter 的 updated/type/status；資料源與卡片依 git 新增紀錄'+
+   '（都不看檔案時間，避免 pull 造成虛報）</div>';}
+// 快速開圖：「架構圖」群組由 KB 的圖登記表即時推導，其餘群組來自 config.json
+// 的 kb_links；都由 /kb/<path> 唯讀提供。
+// 瀏覽器不會從 http 頁面開 file:// ，所以一定要走這條路由才點得開。
+function kbLinks(){const ls=(_kbToday.links)||[];if(!ls.length)return '';
+ const groups=[];ls.forEach(l=>{let g=groups.find(x=>x.g===l.group);
+   if(!g){g={g:l.group,items:[]};groups.push(g);}g.items.push(l);});
+ return '<div style="border-top:1px solid #21262d;margin-top:8px;padding-top:6px">'+
+   groups.map(g=>'<div style="margin-bottom:4px"><div class="sub" style="font-weight:600">'+
+     esc(g.g)+'</div><div style="display:flex;flex-wrap:wrap;gap:6px;padding-top:2px">'+
+     g.items.map(l=>l.exists
+       ? '<a class="kblink" href="/kb/'+encodeURI(l.path)+'" target="_blank" rel="noopener" title="'+
+         esc(l.path)+'">'+esc(l.label)+'</a>'
+       : '<span class="kblink dead" title="'+esc(l.path)+' 不存在">'+esc(l.label)+' ⚠</span>'
+     ).join('')+'</div></div>').join('')+'</div>';}
+async function loadKbToday(){if(_kbBusy)return;_kbBusy=true;_kbError='';
+ try{const r=await fetch('/api/kb-today'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''));if(!r.ok)throw new Error('request failed');_kbToday=await r.json();}
+ catch(e){_kbToday=null;_kbError=''+e;}
+ finally{_kbBusy=false;if(LAST)render(LAST);}}
+function presetsCard(d){
+ const ps=d.presets||[],sp=d.spawns||[];
+ if(!ps.length&&!sp.length)return '';
+ let h='<div class="card" data-cid="text:presets"><h2>🚀 一鍵開工<span class="sub">'+ps.length+'</span>'+
+  '<span class="sub" style="font-weight:400">按一下就在指定專案一次開好一組 agent</span></h2>';
+ h+=ps.map(p=>'<div style="display:flex;align-items:center;gap:8px;padding:3px 0">'+
+  '<b style="font-size:12px">'+esc(p.name)+'</b>'+
+  '<span class="sub">'+esc((p.project_dir||'').split(/[\\/]/).pop())+'</span>'+
+  '<span class="sub">'+p.agents.map(a=>a.type+(a.type==='claude'&&a.mode?':'+a.mode:'')).join(' + ')+'</span>'+
+  '<button class="pbtn" data-preset="'+esc(p.name)+'" style="margin-left:auto">🚀 開工</button></div>').join('');
+ if(!ps.length)h+='<div class="note">還沒設定任何組合 — 在 config.json 的 presets 加一組 {name, project_dir, agents:[{type,mode,prompt_template}]} 就會出現在這裡</div>';
+ if(!sp.length&&ps.length)h+='<div class="note">最近啟動紀錄：尚無 — 這裡會列出從上面按鈕開過的 agent，空白代表還沒用過，不是壞掉</div>';
+ if(sp.length){h+='<div class="sub" style="margin-top:8px">最近啟動紀錄</div><table style="margin-top:2px">'+sp.map(s=>'<tr><td class="l" style="max-width:120px" title="'+esc(s.note||'')+'">'+esc(s.preset)+' #'+s.agent_idx+'</td>'+
+  '<td class="sub">'+esc(s.agent_type)+'</td><td>'+spawnChip(s.status)+'</td><td class="sub">'+
+  (s.session_id?'<a href="/session/'+encodeURIComponent(s.session_id)+(TOKEN?'?token='+encodeURIComponent(TOKEN):'')+'">'+esc(s.session_id.slice(0,8))+'</a>':esc(s.name||'—'))+'</td>'+
+  '<td class="sub">'+ago(s.ts)+'</td><td style="white-space:nowrap">'+
+  (s.status==='retryable'?'<button class="pbtn" data-preset="'+esc(s.preset)+'" data-idx="'+s.agent_idx+'" title="重試這個 agent">↻</button>':'')+
+  '</td></tr>').join('')+'</table>';}
+ h+='<div class="note">agents 以 split-pane 開在專用「cockpit」視窗（不搶你目前的視窗、同屏可見）· 走既有 allowlist/CSRF 層 · retryable=窗格開了但 session 沒註冊（不記成功、可重試）· 關閉請直接在 cockpit 視窗操作（pane 無法安全地按 title 關）</div></div>';
+ return h;}
+function renderText(d){
+ let h1='';
+ for(const [k,title] of SRC){ if(PREFS.hidden[k])continue; const rows=d[k]||[];
+  h1+='<div class="card" data-cid="text:'+k+'"><h2>'+title+'<span class="sub">'+rows.length+'</span></h2>'+rowsTbl(rows,k);
+  // The per-project antigravity rows are the newest mtime under a project's
+  // .antigravity dir — "when this project was last touched", NOT a session.
+  // Drawn in a list beside real session rows they read as sessions, so the
+  // distinction has to be stated on screen: the row's own `detail` field says
+  // it, but nothing renders `detail`, so the bucket note carries it.
+  if(k==='antigravity')h1+='<div class="note">no central session index — last-activity / reports only; live run state N/A · 專案列＝該專案 .antigravity 資料夾最後觸碰時間（<b>不是 session</b>）；僅 (Antigravity IDE) 一列是全域 liveness</div>';
+  // Say when the codex rows are NOT real activity times. Without this an empty
+  // codex section reads identically whether nothing is running or the state DB
+  // could not be read — the exact ambiguity this data source was added to end.
+  if(k==='codex'&&d.codex_source&&d.codex_source!=='db')h1+='<div class="note">codex source degraded ('+esc(d.codex_source)+') — timestamps are thread-creation time, not last activity</div>';
+  if(k==='hermes')h1+='<div class="note">local-model agent · current task = latest message (read-only from state.db)</div>';
+  h1+='</div>';}
+ let h2=presetsCard(d);
+ const ho=d.handoff;const c=ho.counts;const totAll=c.OPEN+c.DONE+c.SUPERSEDED+c.WITHDRAWN;
+ // 跨 AI 交接（ADR-010 / KB kb-019）：收件人來自各檔的「- 收：」行，後端已算好；沒有任何
+ // 收件人時不畫（沒開 opt-in 的機器不該看到一行全零）。
+ const br=ho.by_recipient||{};const brTot=(br.Claude||0)+(br.Codex||0)+(br.both||0)+(br.other||0);
+ const brTxt=brTot?'<span class="sub" title="各 _handoff/handoff_*.md 的「- 收：」行；both = 一檔同時點名兩家">收：Claude '+(br.Claude||0)+' · Codex '+(br.Codex||0)+(br.both?' · 兩家皆可 '+br.both:'')+(br.other?' · 其他 '+br.other:'')+'</span>':'';
+ h2+='<div class="card" data-cid="text:handoff"><h2>🤝 待處理 Handoff<span class="sub">'+c.OPEN+' open</span>'+brTxt+'</h2>'+bucketSummary(ho.buckets)+ownerSummary(ho.owner_groups,ho.platform_counts)+handoffTbl(ho.open)+
+   '<div class="note">✅ done '+c.DONE+' · ↩ sup '+c.SUPERSEDED+' · ✖ wd '+c.WITHDRAWN+'  /  '+totAll+' total</div></div>';
+ h2+=kbTodayCard();
+ h2+=codexPollCard(d);
+ h2+=codexBridgeCard(d);
+ const hh=d.hook_health||[];
+ if(hh.length){h2+='<div class="card" data-cid="text:hookerr"><h2>⚙ Hook errors<span class="sub">'+hh.length+'</span></h2><table>'+hh.map(x=>'<tr><td class="ctx"><span style="color:#f85149">⚠'+x[1]+'</span></td><td class="l">'+esc(x[0])+'</td></tr>').join('')+'</table><div class="note">exitCode 127 = hook script not found; summed over visible Claude sessions</div></div>';}
+ document.getElementById('grid1').innerHTML=h1;document.getElementById('grid2').innerHTML=h2;
+ if(_kbToday===null&&!_kbBusy&&!_kbError)loadKbToday();  // on demand, once — never in the poll
+ applyCollapse(document.getElementById('grid1'));applyCollapse(document.getElementById('grid2'));
+}
+// ---- Signal Desk: semantic parent zones, queue tickets, and read-only lanes ----
+const seats=new Map();
+function hashInt(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+const TONEC=['t0','t1','t2'];
+const DESK_BASE='<rect x="6" y="72" width="92" height="7" rx="2" fill="#21262d"/><rect x="6" y="79" width="92" height="3" rx="1.5" fill="#161b22"/><rect x="14" y="82" width="4" height="14" rx="2" fill="#161b22"/><rect x="86" y="82" width="4" height="14" rx="2" fill="#161b22"/>';
+const DEV_MAC='<g class="device"><rect x="58" y="54" width="30" height="18" rx="2" fill="#2d333b"/><rect class="screen" x="60" y="56" width="26" height="14" rx="1" opacity="0"/><rect x="69" y="55" width="8" height="2" rx="1" fill="#161b22"/><rect x="55" y="72" width="36" height="3" rx="1.5" fill="#3d444d"/></g>';
+const DEV_WIN='<g class="device"><rect x="56" y="50" width="34" height="20" rx="2" fill="#2d333b"/><rect class="screen" x="58" y="52" width="30" height="16" rx="1" opacity="0"/><rect x="70" y="70" width="6" height="5" fill="#3d444d"/><rect x="63" y="75" width="20" height="3" rx="1.5" fill="#3d444d"/></g>';
+// P5 identity registry: batch floor, vendor emblem, and status glyph are independent.
+const BATCH_PALETTE=['#8156D8','#D08A32','#2B9A92','#C74B79'];
+const VENDOR_EMBLEM={
+ cc:{name:'Claude Code',source:'claude',svg:'<path d="M2 6h8M6 2v8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'},
+ codex:{name:'Codex',source:'codex',svg:'<path d="M2.5 2.5h7v7h-7zM2.5 6h7M6 2.5v7" fill="none" stroke="currentColor" stroke-width="1.5"/>'},
+ hermes:{name:'Hermes',source:'hermes',svg:'<path d="M2 9.5 6 2l4 7.5L6 7z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>'},
+ antigravity:{name:'Antigravity',source:'antigravity',svg:'<path d="M2 7h8M3.5 4.5h5M4.5 2h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'},
+ copilot:{name:'Copilot',source:'copilot',svg:'<circle cx="4" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/>'},
+ neutral:{name:'Unknown source',source:'',svg:'<path d="M2 6h8M6 2v8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'}
+};
+const STATUS_GLYPH={
+ running:'<circle cx="94" cy="18" r="3" fill="currentColor"/>',
+ idle:'<path d="M91 18a3 3 0 0 1 6 0v3h-6z" fill="currentColor"/>',
+ waiting:'<path d="M91 15h6l-2 3 2 3h-6l2-3z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>',
+ stopped:'<circle cx="94" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="1.25"/>',
+ stale:'<path d="M91.5 15.5l5 5M94 15a3 3 0 1 1-3 3" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>'
+};
+const VENDOR_ALIAS={claude:'cc',cc:'cc',codex:'codex',hermes:'hermes',antigravity:'antigravity',copilot:'copilot'};
+const SIGNAL_DESK_HEAD={claude:{src:'assets/signal-desk/operator-head-v1.png',alt:'Claude Code operator'},default:{src:'assets/signal-desk/operator-head-v1.png',alt:'AI operator'}};
+function normalizeVendor(value){return VENDOR_ALIAS[String(value||'').toLowerCase()]||'neutral';}
+function resolveVendor(value){const key=normalizeVendor(value),emblem=VENDOR_EMBLEM[key];return {key:key,emblem:emblem,color:SRCCOLOR[emblem.source]||'var(--p1-ink)'};}
+function signalDeskHead(source){const asset=SIGNAL_DESK_HEAD[source]||SIGNAL_DESK_HEAD.default;return '<img class="desk-head" src="'+asset.src+'" alt="'+asset.alt+'" decoding="async">';}
+function normalizeStatus(value){return STATUS_GLYPH[value]?value:'idle';}
+function batchColor(groupKey){return BATCH_PALETTE[hashInt(String(groupKey||''))%BATCH_PALETTE.length];}
+function vendorEmblem(value){const v=resolveVendor(value);return '<g class="vendor-emblem" transform="translate(40 5)" style="color:'+v.color+'">'+v.emblem.svg+'</g>';}
+function statusGlyph(value){return '<g class="status-glyph" style="color:var(--p1-ink)">'+STATUS_GLYPH[normalizeStatus(value)]+'</g>';}
+const SRCCOLOR={claude:'#f0883e',codex:'#58a6ff',hermes:'#a371f7',antigravity:'#3fb950',copilot:'#39c5cf'}; // 🟧🟦🔮🟩🤖 per-vendor tint
+const MODEMAP={bypassPermissions:['bypass','🔓'],plan:['plan','📋'],acceptEdits:['auto','✎'],dontAsk:['auto','✎']};
+function actClass(t){t=(t||'').toLowerCase();
+ if(/fix|bug|error|fail|crash|patch|修/.test(t))return ['fix','bug fix'];
+ if(/review|lint|audit|評議| pr /.test(t))return ['review','review'];
+ if(/plan|design|architec|計畫|規劃|架構/.test(t))return ['plan','plan'];
+ if(/search|research|investigat|explore|grep|find|查|調研/.test(t))return ['search','search'];
+ return ['task','task'];}
+function miniSVG(mini){return '<svg viewBox="28 10 76 70" width="40" height="64"><ellipse class="floorglow" cx="46" cy="76" rx="15" ry="2.5"/>'+vendorEmblem(mini.vendor)+statusGlyph(mini.status)+'<path d="M34 74 Q34 50 46 49 Q58 50 58 74 Q46 78 34 74 Z" fill="var(--body)"/><rect x="42" y="42" width="8" height="9" rx="3" fill="var(--body)"/></svg>';}
+function signalDeskOrdinals(rows){const fixed=new Set();let next=Math.max(1,Number(PREFS.signalDeskNextOrdinal)||1),changed=false;
+ for(const r of rows){if(Number.isInteger(r.agentIdx)&&r.agentIdx>=0){r.parentOrdinal=r.agentIdx+1;fixed.add(r.parentOrdinal);next=Math.max(next,r.parentOrdinal+1);}}
+ for(const r of rows){if(r.parentOrdinal)continue;let saved=Number(PREFS.signalDeskOrdinals[r.id]);if(!Number.isInteger(saved)||saved<1||fixed.has(saved)){saved=next++;PREFS.signalDeskOrdinals[r.id]=saved;changed=true;}r.parentOrdinal=saved;fixed.add(saved);next=Math.max(next,saved+1);}
+ if(PREFS.signalDeskNextOrdinal!==next){PREFS.signalDeskNextOrdinal=next;changed=true;}if(changed)savePrefs();return rows;}
+function officeRows(d){const out=[];for(const [k] of SRC){if(PREFS.hidden[k])continue;for(const r of (d[k]||[])){if(!r.session_id)continue;const minis=Array.isArray(r.mini_rows)?r.mini_rows.filter(m=>m&&m.session_id).map(m=>({id:String(m.session_id),vendor:normalizeVendor(m.vendor),status:normalizeStatus(m.status)})):[];const workKind=['working','standby','cli_queue'].includes(r.work_kind)?r.work_kind:'standby';const agentIdx=Number.isInteger(r.agent_idx)&&r.agent_idx>=0?r.agent_idx:null;out.push({id:String(r.session_id),src:k,vendor:normalizeVendor(r.vendor||k),groupKey:String(r.group_key||r.session_id),workKind:workKind,workReason:r.work_reason||'',agentIdx:agentIdx,label:r.label||'',status:normalizeStatus(r.status),task:r.task_current||'',subs:r.subagents||minis.length,minis:minis,elapsed:(r.elapsed!=null?r.elapsed:null),mode:r.pmode||'',os:r.os||'',machine:machKey(r)||''});}}return signalDeskOrdinals(out);}
+function signalDeskRoute(r){if(r.status==='stopped')return 'stopped';if(r.workKind==='cli_queue')return 'queue';if(r.workKind==='working')return 'working';return 'standby';}
+function signalDeskRouteLabel(r){const labels={active_tail:'已確認本機工具工作中',status_stopped:'session 已停止',remote_no_live_tail:'遠端無本機 activity 訊號'};return labels[r.workReason]||({working:'工作中',stopped:'已停止',queue:'CLI 排隊'}[signalDeskRoute(r)]||'待命／審閱');}
+function signalChildLabel(r,index){return 'a'+r.parentOrdinal+'.'+(index+1);}
+function makeDesk(r){const h=hashInt(r.src+'/'+r.id),cls=TONEC[h%3],tilt=((h>>6)%5)-2;
+  const isMac=(r.os?r.os==='mac':((h>>8)%2===0));
+  const el=document.createElement('div');el.className='desk signal-agent '+cls;el.dataset.id=r.id;el.dataset.sessionId=r.id;el.setAttribute('role','button');el.tabIndex=0;el.style.setProperty('--tilt',tilt+'deg');
+ el.innerHTML='<div class="hcard"></div><div class="halo"></div><div class="followers"></div>'+
+  '<div class="person"><svg class="ch" width="92" height="104" viewBox="0 0 110 104">'+
+  '<ellipse class="floorglow" cx="46" cy="99" rx="30" ry="4"/><ellipse class="shadow" cx="46" cy="99" rx="19" ry="3"/>'+
+  '<g class="vendor-slot"></g><g class="status-slot"></g><g class="deskg">'+DESK_BASE+(isMac?DEV_MAC:DEV_WIN)+'</g>'+
+  '<g class="body">'+
+   '<g class="legs" fill="var(--body)"><rect class="leg legL" x="39" y="70" width="6" height="22" rx="3"/><rect class="leg legR" x="49" y="70" width="6" height="22" rx="3"/></g>'+
+   '<rect class="arm" x="54" y="60" width="16" height="6" rx="3" fill="var(--body)"/>'+
+   '<path class="torso" d="M34 74 Q34 50 46 49 Q58 50 58 74 Q46 78 34 74 Z" fill="var(--body)"/>'+
+   '<rect x="42" y="42" width="8" height="9" rx="3" fill="var(--body)"/>'+
+  '</g>'+
+  '<text class="qmark" x="66" y="20" font-size="15" font-weight="700" fill="var(--p1-ink)" opacity="0">?</text>'+
+  '<circle class="pip" cx="92" cy="86" r="3"/>'+
+  '</svg>'+signalDeskHead(r.src)+'</div>'+
+  '<div class="labelrow"><span class="signal-parent-id"></span><span class="mbadge"></span><span class="modechip"></span><span class="srcname"></span></div><div class="signal-route"></div><div class="child-bag"></div><div class="dsubs"></div>';
+ return el;}
+function fmtMin(sec){if(sec==null)return '—';var m=Math.round(sec/60);return m<1?'<1m':(m<60?m+'m':Math.floor(m/60)+'h'+(m%60)+'m');}
+function etaMin(sec){if(sec==null)return null;return Math.max(5,Math.ceil((sec/60)/5)*5);}
+function updateDesk(el,r){
+ const pose=r.status==='stale'?'stopped':normalizeStatus(r.status);if(el.dataset.st!==pose)el.dataset.st=pose;
+ const batch=batchColor(r.groupKey);if(el.style.getPropertyValue('--batch')!==batch)el.style.setProperty('--batch',batch);
+ const vendor=resolveVendor(r.vendor),vs=el.querySelector('.vendor-slot');if(el.dataset.vendor!==vendor.key)el.dataset.vendor=vendor.key;
+ if(vs.dataset.vendor!==vendor.key){vs.dataset.vendor=vendor.key;vs.innerHTML=vendorEmblem(vendor.key);}
+ const glyph=normalizeStatus(r.status),gs=el.querySelector('.status-slot');
+ if(gs.dataset.status!==glyph){gs.dataset.status=glyph;gs.innerHTML=statusGlyph(glyph);}
+ const mc=el.querySelector('.modechip');
+ if(mc.dataset.m!==(r.mode||'')){mc.dataset.m=r.mode||'';var mm=MODEMAP[r.mode];
+  if(mm){mc.className='modechip '+(r.mode==='bypassPermissions'?'bypass':r.mode==='plan'?'plan':'auto');mc.textContent=mm[1]+' '+mm[0];}
+  else{mc.className='modechip';mc.textContent='';}}
+ const mb=el.querySelector('.mbadge'),mbh=machineBadge(machKey(r));if(mb.innerHTML!==mbh)mb.innerHTML=mbh;
+  const sn=el.querySelector('.srcname'),snm=vendor.emblem.name;if(sn.textContent!==snm)sn.textContent=snm;
+  if(sn.style.color!==vendor.color)sn.style.color=vendor.color;
+  const parentId=el.querySelector('.signal-parent-id'),parentText='A'+r.parentOrdinal;if(parentId.textContent!==parentText)parentId.textContent=parentText;
+  const deskLabel=parentText+' · '+snm+' · '+signalDeskRouteLabel(r);if(el.getAttribute('aria-label')!==deskLabel)el.setAttribute('aria-label',deskLabel);
+  el.setAttribute('aria-pressed',PREFS.signalDeskSelected===r.id?'true':'false');
+  const fol=el.querySelector('.followers'),minis=r.minis.slice(0,4),miniSig=minis.map(m=>m.id+'|'+m.vendor+'|'+m.status).join('|');
+  if(fol.dataset.sig!==miniSig){fol.dataset.sig=miniSig;fol.innerHTML='';for(var i=0;i<minis.length;i++){var m=document.createElement('div');m.className='mini';m.dataset.vendor=minis[i].vendor;m.innerHTML='<img class="mini-head" src="assets/signal-desk/operator-head-v1.png" alt="" decoding="async">'+miniSVG(minis[i]);fol.appendChild(m);}}
+  const bag=el.querySelector('.child-bag'),known=r.minis.map(function(_m,index){return signalChildLabel(r,index);}),bagSig=known.join('|')+'|'+r.subs;
+  if(bag.dataset.sig!==bagSig){bag.dataset.sig=bagSig;bag.innerHTML=known.map(function(label){return '<span class="child-token">'+label+'</span>';}).join('')+(r.subs>known.length?'<span class="child-unknown">其餘子代理身分不可得</span>':'');}
+  const su=el.querySelector('.dsubs'),s=r.subs>known.length?('🔬'+r.subs):'';if(su.textContent!==s)su.textContent=s;
+ const c=el.querySelector('.hcard'),task=(r.task||'').trim(),show=!!task&&r.status!=='stopped';
+ c.classList.toggle('show',show);
+ const eta=etaMin(r.elapsed),pct=(r.elapsed!=null&&eta)?Math.min(96,Math.round((r.elapsed/60)/eta*100)):null;
+ const sig=task+'|'+r.elapsed+'|'+eta+'|'+r.status;
+ if(c.dataset.sig===sig)return;c.dataset.sig=sig;
+ if(!show){c.innerHTML='';return;}
+ var av=actClass(task);
+ c.innerHTML='<span class="acttag '+av[0]+'">'+av[1]+'</span>'+
+  '<div class="task" title="'+esc(task)+'">'+esc(task)+'</div>'+
+  '<div class="meta"><span>⏱ <b>'+fmtMin(r.elapsed)+'</b></span><span>~<b>'+(eta?eta+'m':'?')+'</b> est</span></div>'+
+  (pct!=null?'<div class="bar"><span class="fill" style="width:'+pct+'%"></span></div>':'');
+}
+function officeZoneFor(r){return signalDeskRoute(r);}
+function signalDeskPrefersReducedMotion(){return !!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);}
+function signalDeskReparentDesk(el,zone,route){
+ const prior=el.dataset.zone||'',moved=el.parentElement!==zone;
+ if(route==='queue'||!moved)return false;
+ const before=el.getBoundingClientRect(),flipSeq=String((Number(el.dataset.flipSeq)||0)+1);zone.appendChild(el);el.dataset.zone=route;el.dataset.flipSeq=flipSeq;
+ if(!prior||signalDeskPrefersReducedMotion()){el.classList.remove('signal-flip-moving');el.style.transition='';el.style.transform='';delete el.dataset.transition;return false;}
+ const after=el.getBoundingClientRect(),dx=before.left-after.left,dy=before.top-after.top;
+ if(!dx&&!dy){delete el.dataset.transition;return false;}
+ el.dataset.transition=prior+'>'+route;el.classList.remove('signal-flip-moving');el.style.transition='none';el.style.transform='translate('+dx+'px,'+dy+'px)';void el.offsetWidth;
+ requestAnimationFrame(function(){if(el.dataset.flipSeq!==flipSeq)return;el.classList.add('signal-flip-moving');el.style.transition='';el.style.transform='';requestAnimationFrame(function(){if(el.dataset.flipSeq!==flipSeq)return;setTimeout(function(){if(el.dataset.flipSeq===flipSeq)el.classList.remove('signal-flip-moving');},360);});});
+ return true;
+}
+function ensureOfficeShell(){const office=document.getElementById('office');if(office.dataset.ready)return office;
+ office.dataset.ready='1';office.innerHTML='<div class="signal-desk"><div class="signal-floor" aria-label="Signal Desk office floor"><section class="signal-zone" data-zone="working" aria-labelledby="signal_working"><h2 id="signal_working">Working <span class="sub"></span></h2><div class="signal-desks"></div></section><section class="signal-zone" data-zone="standby" aria-labelledby="signal_standby"><h2 id="signal_standby">Standby / Review <span class="sub"></span></h2><div class="signal-desks"></div></section><section class="signal-zone" data-zone="stopped" aria-labelledby="signal_stopped"><h2 id="signal_stopped">Stopped <span class="sub"></span></h2><div class="signal-desks"></div></section></div><aside class="signal-rail" aria-label="Signal Desk operations"><section class="signal-inspector" aria-live="polite"><h2>Inspector</h2><div class="signal-inspector-body"></div></section><section class="signal-queue"><h2>CLI Queue <span class="sub"></span></h2><div class="queue-list"></div><div class="queue-actions"></div></section><section class="office-pool"><h2>Process pool <span class="sub"></span></h2><div class="pool-list"></div><div class="queue-actions"></div></section></aside></div>';
+ return office;}
+function officeTicket(title,detail,seed){return '<div class="queue-ticket" style="--batch:'+batchColor(seed||title)+'"><b>'+esc(title||'CLI bridge job')+'</b><span class="sub">'+esc(detail||'')+'</span></div>';}
+function bridgeQueueText(row){const bits=[];if(row.agent)bits.push(row.agent);if(row.model)bits.push(row.model);if(row.job_id)bits.push('job '+row.job_id);if(row.duration_s!=null)bits.push(Math.round(row.duration_s)+'s');if(row.wait_s!=null)bits.push('wait '+(row.wait_source==='estimated'?'~':'')+fmtWait(row.wait_s));return bits.join(' · ');}
+// Queue waits used to be sub-second inferences, so a flat *1000 'ms' read fine.
+// Since mcs-103 the dispatcher reports the real wait, which is minutes when a
+// dispatch actually queues — '1080000ms' is not a number anyone can read. The
+// leading '~' marks a value we inferred rather than measured.
+function fmtWait(w){if(w<1)return Math.round(w*1000)+'ms';if(w<60)return w.toFixed(1)+'s';return Math.round(w/60)+'m';}
+// asm-011: what the collector did NOT show has to be ON SCREEN. A silently
+// dropped record is indistinguishable from a dispatch that never happened, and
+// the 128KB size cap this replaces hid 62% of real dispatches exactly that way
+// — including every backend_error the panel had ever been asked to display.
+// `scanned` rides along because "2 skipped" alone is a number nobody can size.
+function bridgeSkipText(sk){if(!sk)return '';const bits=[];if(sk.oversize)bits.push(sk.oversize+' oversize');if(sk.unreadable)bits.push(sk.unreadable+' unreadable');if(sk.invalid)bits.push(sk.invalid+' malformed');if(!bits.length)return '';const n=(sk.oversize||0)+(sk.unreadable||0)+(sk.invalid||0);return n+' of '+(sk.scanned||n)+' scanned skipped ('+bits.join(', ')+')';}
+let _officeBridge=null,_officeBridgeBusy=false,_officeBridgeError='',_officePool=null,_officePoolBusy=false,_officePoolError='',_officeQueueRows=[];
+function paintOfficeQueue(){const office=ensureOfficeShell(),lane=office.querySelector('.signal-queue'),list=lane.querySelector('.queue-list'),count=lane.querySelector('h2 .sub'),actions=lane.querySelector('.queue-actions');
+ if(_officeBridgeBusy){count.textContent='loading';list.innerHTML='<div class="office-empty">Loading read-only CLI bridge queue…</div>';actions.innerHTML='';return;}
+ if(_officeBridgeError){count.textContent='unavailable';list.innerHTML='<div class="office-empty">Queue data is unavailable.</div>';actions.innerHTML='<button class="pbtn" data-office="retry-bridge">Retry</button>';return;}
+ const bridge=_officeBridge||{},running=Array.isArray(bridge.now_running)?bridge.now_running:[],waiting=Array.isArray(bridge.waiting)?bridge.waiting:[],recent=Array.isArray(bridge.recent)?bridge.recent:[],tickets=[];
+ _officeQueueRows.forEach(function(row){tickets.push(officeTicket('Queued · '+resolveVendor(row.vendor).emblem.name,'A'+row.parentOrdinal+' · '+signalDeskRouteLabel(row),row.id));});
+ running.forEach(function(row){tickets.push(officeTicket('Running · '+(row.agent||'CLI bridge'),bridgeQueueText(row),row.job_id||row.agent));});
+ waiting.forEach(function(row){tickets.push(officeTicket('Waiting · '+(row.agent||'CLI bridge'),bridgeQueueText(row),row.job_id||row.agent));});
+ recent.forEach(function(row){tickets.push(officeTicket('Recent · '+(row.outcome||'finished'),bridgeQueueText(row),row.job_id||row.agent));});
+  const skipNote=bridgeSkipText(bridge.skipped);
+ count.textContent=(_officeQueueRows.length+running.length+waiting.length)+' active'+(skipNote?' · '+skipNote:'');list.innerHTML=tickets.join('')||'<div class="office-empty">No CLI bridge jobs are available.</div>';actions.innerHTML='<button class="pbtn" data-office="retry-bridge">Retry</button>';
+}
+async function loadOfficeBridge(){if(_officeBridgeBusy)return;_officeBridgeBusy=true;_officeBridgeError='';paintOfficeQueue();try{const r=await fetch('/api/cli-bridge'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''));if(!r.ok)throw new Error('request failed');_officeBridge=await r.json();}catch(e){_officeBridge=null;_officeBridgeError=''+e;}finally{_officeBridgeBusy=false;paintOfficeQueue();}}
+function poolSourceText(source){return source==='ai_opened'?'AI opened (heuristic)':source==='ai_scheduled'?'AI scheduled':'System';}
+function paintOfficePool(){const office=ensureOfficeShell(),pool=office.querySelector('.office-pool'),list=pool.querySelector('.pool-list'),count=pool.querySelector('h2 .sub'),actions=pool.querySelector('.queue-actions');
+ if(_officePoolBusy){count.textContent='loading';list.innerHTML='<div class="office-empty">Loading process pool…</div>';actions.innerHTML='';return;}
+ if(_officePoolError){count.textContent='unavailable';list.innerHTML='<div class="office-empty">Pool data is unavailable.</div>';actions.innerHTML='<button class="pbtn" data-office="retry-pool">Retry</button>';return;}
+ const data=_officePool||{},groups={system:[],ai_opened:[],ai_scheduled:[]};(data.ports||[]).forEach(function(row){groups[groups[row.pool_source]?row.pool_source:'system'].push(row.proc||row.cmd||'process');});(data.tasks||[]).forEach(function(row){groups[groups[row.pool_source]?row.pool_source:'ai_scheduled'].push(row.name||'scheduled task');});
+ const keys=['system','ai_opened','ai_scheduled'];count.textContent=keys.reduce(function(n,key){return n+groups[key].length;},0)+' items';list.innerHTML=keys.map(function(key){const names=groups[key];return '<div class="pool-source"><b>'+poolSourceText(key)+'</b><span class="sub">'+(names.length?esc(names.slice(0,3).join(' · '))+(names.length>3?' +'+(names.length-3):''):'No entries')+'</span></div>';}).join('');actions.innerHTML='<button class="pbtn" data-office="retry-pool">Refresh</button>';
+}
+async function loadOfficePool(){if(_officePoolBusy)return;_officePoolBusy=true;_officePoolError='';paintOfficePool();try{const r=await fetch('/api/ports'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''));if(!r.ok)throw new Error('request failed');_officePool=await r.json();}catch(e){_officePool=null;_officePoolError=''+e;}finally{_officePoolBusy=false;paintOfficePool();}}
+function paintSignalInspector(rows){const office=ensureOfficeShell(),body=office.querySelector('.signal-inspector-body');let row=rows.find(function(r){return r.id===PREFS.signalDeskSelected;});if(!row){row=rows.find(function(r){return signalDeskRoute(r)!=='queue';})||rows[0];if(row&&PREFS.signalDeskSelected!==row.id){PREFS.signalDeskSelected=row.id;savePrefs();}}
+ if(!row){body.innerHTML='<p class="sub">No agent is available for inspection.</p>';return;}
+ const vendor=resolveVendor(row.vendor).emblem.name,known=row.minis.map(function(_m,index){return signalChildLabel(row,index);}),children=known.length?'<div class="child-list">'+known.map(function(label){return '<span class="child-token">'+label+'</span>';}).join('')+'</div>':'<span class="sub">未取得子代理身分</span>';
+ body.innerHTML='<dl><div><dt>Parent</dt><dd>A'+row.parentOrdinal+' · '+esc(row.label||row.id)+'</dd></div><div><dt>AI source</dt><dd>'+esc(vendor)+'</dd></div><div><dt>Zone</dt><dd>'+esc(signalDeskRoute(row))+'</dd></div><div><dt>Routing evidence</dt><dd>'+esc(signalDeskRouteLabel(row))+'</dd></div><div><dt>展示序</dt><dd>'+(row.agentIdx!=null?'spawn agent_idx #'+row.agentIdx:'local preference store fallback')+'</dd></div><div><dt>Children</dt><dd>'+children+(row.subs>known.length?'<div class="sub">另有 '+(row.subs-known.length)+' 位子代理，身分不可得。</div>':'')+'</dd></div></dl>';
+}
+function sizeOffice2(){const f=document.getElementById('office2frame');if(!f)return;
+ const top=f.getBoundingClientRect().top;f.style.height=Math.max(360,window.innerHeight-top-14)+'px';}
+function renderOffice(d){
+ // Cut-over 2026-07-27: the 🏢 tab now shows office2 (/office2) in an iframe. The
+ // Signal Desk renderer below is kept intact but unreached — retiring it is a
+ // separate plan. office2 polls its own data, so the iframe mounts once.
+ const host=document.getElementById('office');
+ if(!host.dataset.office2){
+  host.dataset.office2='1';host.classList.add('office2-host');
+  host.innerHTML='<iframe id="office2frame" src="/office2" title="辦公室"></iframe>';
+  sizeOffice2();window.addEventListener('resize',sizeOffice2);
+ }else sizeOffice2();
+ return;
+ const office=ensureOfficeShell(),rows=officeRows(d),deskRows=rows.filter(function(r){return signalDeskRoute(r)!=='queue';}).sort(function(a,b){return a.groupKey.localeCompare(b.groupKey)||a.parentOrdinal-b.parentOrdinal||a.id.localeCompare(b.id);}),seen=new Set();_officeQueueRows=rows.filter(function(r){return signalDeskRoute(r)==='queue';});
+ for(const r of deskRows){seen.add(r.id);let el=seats.get(r.id);if(!el){el=makeDesk(r);seats.set(r.id,el);}const route=officeZoneFor(r),zone=office.querySelector('[data-zone="'+route+'"] .signal-desks');signalDeskReparentDesk(el,zone,route);updateDesk(el,r);}
+ for(const [id,el] of seats){if(!seen.has(id)){el.remove();seats.delete(id);}}
+ ['working','standby','stopped'].forEach(function(zoneName){const zone=office.querySelector('[data-zone="'+zoneName+'"]'),desks=zone.querySelector('.signal-desks'),count=zone.querySelector('h2 .sub'),deskCount=desks.querySelectorAll('.desk').length;count.textContent=deskCount;let empty=desks.querySelector('.office-empty');if(!deskCount){if(!empty){empty=document.createElement('div');empty.className='office-empty';empty.textContent=zoneName==='working'?'No verified local active work.':'No sessions in this zone.';desks.appendChild(empty);}}else if(empty)empty.remove();});
+ paintSignalInspector(rows);paintOfficeQueue();paintOfficePool();if(_officeBridge===null&&!_officeBridgeBusy&&!_officeBridgeError)loadOfficeBridge();if(_officePool===null&&!_officePoolBusy&&!_officePoolError)loadOfficePool();
+}
+function selectSignalDeskAgent(id){if(!id)return;PREFS.signalDeskSelected=id;savePrefs();if(LAST&&PREFS.view==='office')renderOffice(LAST);}
+document.getElementById('office').addEventListener('click',function(e){const b=e.target.closest('[data-office]'),desk=e.target.closest('.signal-agent');if(desk){selectSignalDeskAgent(desk.dataset.id);return;}if(!b)return;if(b.dataset.office==='retry-bridge')loadOfficeBridge();else if(b.dataset.office==='retry-pool')loadOfficePool();});
+document.getElementById('office').addEventListener('keydown',function(e){if(e.key!=='Enter'&&e.key!==' ')return;const desk=e.target.closest('.signal-agent');if(!desk)return;e.preventDefault();selectSignalDeskAgent(desk.dataset.id);});
+let _svcBusy=false,_svcData=null,_aiText='';
+async function opsPost(path,body){
+ const TOKEN=new URLSearchParams(location.search).get('token')||'';
+ const r=await fetch(path+(TOKEN?'?token='+encodeURIComponent(TOKEN):''),{method:'POST',
+  headers:{'Content-Type':'application/json','X-CSRF-Token':window.__CSRF||''},body:JSON.stringify(body||{})});
+ return r.json();
+}
+async function opsAction(kind,body,label){
+ if(!confirm('確定要操作:'+label+' ?'))return;
+ try{const res=await opsPost('/api/ops/'+kind,body);alert((res.ok?'✓ ':'✗ ')+(res.msg||(res.ok?'done':'failed')));}
+ catch(e){alert('✗ '+e);}
+ renderServices(true);
+}
+async function opsAI(){
+ const ao=document.getElementById('aiout');if(ao){ao.style.display='';ao.innerHTML='<h2>🤖 AI 分析</h2><div class="note">分析中…(會花一點 token)</div>';}
+ try{const res=await opsPost('/api/ops/ai',{});_aiText=res.text||'(無回應)';}catch(e){_aiText='失敗:'+e;}
+ paintServices();
+}
+let _svcInit=document.getElementById('services');
+_svcInit.addEventListener('click',function(e){
+ const t=e.target.closest('[data-svc]');if(!t)return;
+ const a=t.dataset.svc;
+ if(a==='localonly'){PREFS.svcLocalOnly=!PREFS.svcLocalOnly;savePrefs();paintServices();}
+ else if(a==='susponly'){PREFS.svcSuspOnly=!PREFS.svcSuspOnly;savePrefs();paintServices();}
+ else if(a==='refresh'){renderServices(true);}
+ else if(a==='unlock'){PREFS.ops=!PREFS.ops;savePrefs();paintServices();}
+ else if(a==='kill'){opsAction('kill',{pid:+t.dataset.pid,proc:t.dataset.proc},t.dataset.label);}
+ else if(a==='task'){opsAction('task',{name:t.dataset.name,action:t.dataset.act},t.dataset.name+' '+t.dataset.act);}
+ else if(a==='ai'){opsAI();}
+});
+function svcRow(p){return '<tr><td class="ctx" style="font-weight:600;color:#e6edf3">'+esc(''+p.port)+'</td>'+
+ '<td class="l">'+(p.local?'<span title="127.0.0.1 本機" style="font-size:10px">🏠</span> ':'')+esc(p.proc||'?')+' <span class="sub">'+esc(''+(p.ppid||''))+'</span>'+
+ (p.susp?' <span style="color:#e3b341;font-size:10px" title="'+esc(p.reason)+'">⚠可疑</span>':'')+
+ (p.cmd?'<div class="cur" style="color:#6e7681;max-width:330px" title="'+esc(p.cmd)+'">'+esc(p.cmd)+'</div>':'<div class="sub" style="font-size:10px">(cmdline 無法取得)</div>')+
+ '</td><td class="sub" title="started">'+(p.start?esc(p.start.replace('T',' ')):'')+'</td>'+
+ (PREFS.ops?'<td class="ctx">'+(p.killable?'<button class="opbtn kill" data-svc="kill" data-pid="'+p.ppid+'" data-proc="'+esc(p.proc||'')+'" data-label="'+esc((p.proc||'')+' :'+p.port)+'">✕ kill</button>':'<span class="sub" style="font-size:10px">—</span>')+'</td>':'')+
+ '</tr>';}
+function taskBtns(t){var n=esc(t.name);
+ if(t.state==='Disabled')return '<button class="opbtn run" data-svc="task" data-name="'+n+'" data-act="enable">✓ 啟用</button>';
+ if(t.state==='Running')return '<button class="opbtn" data-svc="task" data-name="'+n+'" data-act="stop">■ 停止</button>';
+ return '<button class="opbtn run" data-svc="task" data-name="'+n+'" data-act="run">▶ 執行</button> <button class="opbtn kill" data-svc="task" data-name="'+n+'" data-act="disable">🚫 停用</button>';}
+function paintServices(){
+ const el=document.getElementById('services'),d=_svcData;if(!d)return;
+ const all=d.ports||[],tasks=d.tasks||[];let ports=all;
+ if(PREFS.svcLocalOnly)ports=ports.filter(p=>p.local);
+ if(PREFS.svcSuspOnly)ports=ports.filter(p=>p.susp);
+ const lo=PREFS.svcLocalOnly,so=PREFS.svcSuspOnly,op=PREFS.ops;
+ let h='<div class="toolbar" style="margin-bottom:10px">'+
+  '<span class="chip '+(lo?'on':'')+'" data-svc="localonly"><span class="led"></span>🏠 只看本機</span>'+
+  '<span class="chip '+(so?'on':'')+'" data-svc="susponly"><span class="led"></span>⚠ 只看可疑</span>'+
+  '<span class="chip" data-svc="refresh">🔄 重新整理</span>'+
+  '<span class="chip '+(op?'on':'')+'" data-svc="unlock"><span class="led" style="background:'+(op?'#f85149':'#30363d')+'"></span>'+(op?'🔓 操作中':'🔒 操作')+'</span>'+
+  (op?'<span class="chip" data-svc="ai">🤖 AI 分析可疑</span>':'')+
+  '<span class="sub" style="margin-left:auto">'+(d.error?('<span style="color:#f85149">'+esc(d.error)+'</span>'):('更新 '+esc((d.generated||'').slice(11))))+'</span></div>';
+ h+='<div class="grid"><div class="card" data-cid="svc:ports"><h2>🔌 佔用中的 Port<span class="sub">'+ports.length+' / '+all.length+'</span></h2>'+
+  '<table>'+ports.map(svcRow).join('')+'</table></div>';
+ h+='<div class="card" data-cid="svc:tasks"><h2>⏰ 排程(非系統)<span class="sub">'+tasks.length+'</span></h2><table>'+
+  tasks.map(t=>'<tr><td class="l">'+esc(t.name)+'</td><td class="sub">'+esc(t.state||'')+(t.state==='Running'?' ▶':'')+'</td>'+
+  '<td class="sub">'+(t.next?('⏭ '+esc(t.next.replace('T',' '))):(t.last?('上次 '+esc(t.last.replace('T',' '))):''))+'</td>'+
+  (op?'<td class="ctx">'+(t.allowed?taskBtns(t):'<span class="sub" style="font-size:10px">—</span>')+'</td>':'')+
+  '</tr>').join('')+'</table>'+
+  '<div class="note">⏭ = 下次啟動;▶ = 執行中。'+(op?'操作中:只有白名單項目可動。':'按「🔒 操作」解鎖按鈕。')+'</div></div></div>';
+ if(op)h+='<div id="aiout" class="card" style="margin-top:12px;display:none"></div>';
+ el.innerHTML=h;
+ enableKeyboardControls(el);
+ if(op&&_aiText){var ao=document.getElementById('aiout');ao.style.display='';ao.innerHTML='<h2>🤖 AI 分析</h2>';var pre=document.createElement('div');pre.className='note';pre.style.whiteSpace='pre-wrap';pre.style.color='#c9d1d9';pre.textContent=_aiText;ao.appendChild(pre);}
+ applyCollapse(el);  // aiout one-shot output card has no data-cid on purpose (exempt)
+}
+async function renderServices(force){
+ const el=document.getElementById('services');
+ if(!el.dataset.init){el.dataset.init='1';el.innerHTML='<div class="sub">loading…</div>';}
+ if(_svcBusy)return;_svcBusy=true;
+ const TOKEN=new URLSearchParams(location.search).get('token')||'';
+ try{_svcData=await (await fetch('/api/ports'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''))).json()}catch(e){_svcBusy=false;el.innerHTML='<div class="sub">fetch failed: '+esc(''+e)+'</div>';return}
+ _svcBusy=false;paintServices();
+}
+// ---- deletions view: on-demand fetch (like services); per-source coverage honesty ----
+// XSS rule: cmd/repo/branch/pattern/agent_id/cwd/reason are agent-influenced —
+// every interpolation below goes through esc(); no raw innerHTML of row data.
+let _delBusy=false,_delData=null,_delExecOnly=false,_delRepo='';
+const DELCAP={'v2':['v2 hook','#3fb950','#2ea04322','部署 v2 hook：結構化刪除事件（欄位齊全）'],
+ 'v1-legacy':['v1 legacy','#e3b341','#d2992222','舊版 hook：僅攔截列、欄位不全'],
+ 'no-hook':['無 hook','#ff7b72','#f8514922','此 repo 未部署刪除攔截 hook = 盲區']};
+function delCapBadge(cap){var c=DELCAP[cap]||[cap||'?','#8b949e','#6e768122','未知 hook 能力'];
+ return '<span title="'+esc(c[3])+'" style="background:'+c[2]+';color:'+c[1]+';border-radius:999px;padding:0 6px;font-size:10px;font-weight:600;white-space:nowrap">'+esc(c[0])+'</span>';}
+function delOutcomeBadge(o){
+ if(o==='blocked')return '<span style="background:#2ea04322;color:#3fb950;border-radius:999px;padding:1px 7px;font-size:11px;font-weight:600;white-space:nowrap">🛡 攔截</span>';
+ if(o==='executed')return '<span title="hook 記錄為已執行的 shell 命令（不是本 dashboard 發起）" style="background:#f8514922;color:#ff7b72;border-radius:999px;padding:1px 7px;font-size:11px;font-weight:600;white-space:nowrap">hook 記錄：已執行</span>';
+ if(o==='attempt')return '<span style="background:#6e768122;color:#8b949e;border-radius:999px;padding:1px 7px;font-size:11px;white-space:nowrap">嘗試</span>';
+ return '<span style="background:#6e768122;color:#8b949e;border-radius:999px;padding:1px 7px;font-size:11px;white-space:nowrap">'+esc(o||'?')+'</span>';}
+function delDetail(w){var r=w.row,L=[];
+ L.push('cmd: '+(r.cmd||''));
+ L.push('pattern: '+(r.pattern||''));
+ L.push('reason: '+(r.reason||''));
+ L.push('cwd: '+(r.cwd||''));
+ L.push('ts: '+(r.ts||''));
+ L.push('had_errors: '+(r.had_errors?'true':'false'));
+ L.push('cmd_hash: '+(r.cmd_hash||''));
+ if(r.agent_id)L.push('agent_id: '+r.agent_id);
+ for(var i=0;i<w.att.length;i++){var a=w.att[i];
+  L.push('— 折疊 attempt #'+(i+1)+' — ts: '+(a.ts||'')+' · pattern: '+(a.pattern||'')+' · cmd: '+(a.cmd||''));}
+ return esc(L.join('\n'));}
+function renderDeletions(rows,repos){
+ rows=rows||[];repos=repos||[];
+ var capOf={};for(var i=0;i<repos.length;i++)capOf[repos[i].repo]=repos[i].capability;
+ // display-layer fold: rows arrive newest-first (= reverse of file line order).
+ // An attempt row folds into the nearest result row that FOLLOWS it in line
+ // order with the same cmd_hash in the same repo (fold key = cmd_hash, NOT
+ // pattern — attempt/result patterns may differ). Orphan attempts stand alone.
+ var kept=[],lastRes={};
+ for(var j=0;j<rows.length;j++){var r=rows[j],o=r.outcome||'';
+  var key=(r.repo||'')+' '+(r.cmd_hash||'');
+  if(o==='attempt'&&r.cmd_hash&&lastRes[key]){lastRes[key].att.push(r);continue;}
+  var w={row:r,att:[]};kept.push(w);
+  if(o!=='attempt'&&r.cmd_hash)lastRes[key]=w;}
+ var shown=kept.filter(function(x){var rr=x.row;
+  if(_delExecOnly&&rr.outcome!=='executed')return false;
+  if(_delRepo&&(rr.repo||'')!==_delRepo)return false;
+  return true;});
+ // per-source coverage strip — only Claude Code flows through these hooks; a
+ // source with no events MUST read as BLIND, never blank (blank reads "clean").
+ var cov=[['claude','🟧 Claude Code',1],['codex','🟦 Codex',0],['hermes','🔮 Hermes',0],['antigravity','🟩 Antigravity',0],['copilot','🤖 Copilot',0]];
+ var h='<div class="card" data-cid="del:coverage" style="margin-bottom:12px"><h2>🗑 刪除監控覆蓋（按來源）<span class="sub">'+repos.length+' repo</span></h2>';
+ h+=cov.map(function(s){return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px"><span style="min-width:132px">'+s[1]+'</span>'+
+  (s[2]?'<span style="color:#3fb950;font-weight:600;white-space:nowrap">● 有監控</span><span class="sub">Claude Code hook · '+rows.length+' 筆事件</span>'
+       :'<span style="color:#8b949e;font-weight:600;white-space:nowrap">○ 盲區</span><span class="sub">此來源未受刪除監控（自帶 runtime，不經 Claude Code hook）</span>')+'</div>';}).join('');
+ if(repos.length)h+='<div class="note" style="margin-top:6px">Repo hook 能力：'+repos.map(function(rp){return esc(rp.repo)+' '+delCapBadge(rp.capability)}).join(' · ')+'</div>';
+ h+='</div>';
+ h+='<div class="card" data-cid="del:main"><h2>🗑 刪除事件<span class="sub">'+shown.length+' / '+kept.length+'</span></h2>';
+ if(!shown.length)h+='<div class="sub">— 無符合的刪除事件（僅代表 Claude Code hook 沒看到，不代表其他來源乾淨）—</div>';
+ else h+='<table>'+shown.map(function(x,ix){var rr=x.row;
+  var cap=rr.capability||capOf[rr.repo||'']||'no-hook';
+  var cmd=rr.cmd||'',cshort=cmd.length>90?cmd.slice(0,90)+'…':cmd;
+  var ag=rr.agent==='sub'?['子','#d2b8ff','#a371f733']:['主','#c9d1d9','#21262d'];
+  return '<tr><td class="sub" style="white-space:nowrap" title="'+esc(rr.ts||'')+'">'+ago(rr.ts_epoch)+'</td>'+
+   '<td style="white-space:nowrap">'+esc(rr.repo||'?')+' '+delCapBadge(cap)+'</td>'+
+   '<td><span class="tbadge" style="white-space:nowrap">⎇ '+esc(rr.branch||'—')+'</span></td>'+
+   '<td><span class="tbadge" style="color:'+ag[1]+';background:'+ag[2]+'" title="agent: '+esc(rr.agent||'')+'">'+ag[0]+'</span></td>'+
+   '<td style="white-space:nowrap">'+delOutcomeBadge(rr.outcome||'')+(x.att.length?' <span class="sub" style="cursor:help" title="折疊了 '+x.att.length+' 筆同 cmd_hash 的 attempt 列（按「詳細」展開）">⧉'+x.att.length+'</span>':'')+'</td>'+
+   '<td class="l" style="max-width:320px;font-family:ui-monospace,Consolas,monospace" title="'+esc(cmd)+'">'+esc(cshort)+'</td>'+
+   '<td class="ctx"><button class="opbtn" data-del="toggle" data-i="'+ix+'">詳細</button></td></tr>'+
+   '<tr id="delx_'+ix+'" style="display:none"><td colspan="7"><div style="font-family:ui-monospace,Consolas,monospace;font-size:11px;white-space:pre-wrap;word-break:break-all;user-select:text;background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:8px;color:#c9d1d9">'+delDetail(x)+'</div></td></tr>';}).join('')+'</table>';
+  h+='<div class="note">「hook 記錄：已執行」表示 hook 記錄為已執行的 shell 命令（不是本 dashboard 發起）。</div><div class="note">涵蓋範圍聲明：僅涵蓋 Claude Code hook 可見之 Bash/PowerShell 刪除；非 Claude-Code runtime（Codex/Antigravity/Copilot）、script 內部刪除（python/node）、重導向清空、外部 CLI 代理、未部署 hook 之 repo 均不在監控範圍內。</div></div>';
+ return h;}
+function paintDeletions(){
+ const el=document.getElementById('deletions'),d=_delData;if(!d)return;
+ var rows=d.rows||[],names=[],seen={};
+ for(var i=0;i<rows.length;i++){var n=rows[i].repo||'';if(n&&!seen[n]){seen[n]=1;names.push(n);}}
+ var h='<div class="toolbar" style="margin-bottom:10px">'+
+  '<span class="chip '+(_delExecOnly?'on':'')+'" data-del="exec"><span class="led" style="background:'+(_delExecOnly?'#f85149':'#30363d')+'"></span>⚠ 只看已執行</span>'+
+  names.map(function(nm){return '<span class="chip '+(_delRepo===nm?'on':'')+'" data-del="repo" data-repo="'+esc(nm)+'"><span class="led"></span>📁 '+esc(nm)+'</span>'}).join('')+
+  '<span class="chip" data-del="refresh">🔄 重新整理</span>'+
+  '<span class="sub" style="margin-left:auto">'+(d.error?('<span style="color:#f85149">'+esc(d.error)+'</span>'):('更新 '+esc((d.generated||'').slice(11))))+'</span></div>';
+ h+=renderDeletions(rows,d.repos||[]);
+ el.innerHTML=h;
+ enableKeyboardControls(el);
+ applyCollapse(el);
+}
+async function renderDeletionsView(force){
+ const el=document.getElementById('deletions');
+ if(!el.dataset.init){el.dataset.init='1';el.innerHTML='<div class="sub">loading…</div>';}
+ if(_delBusy)return;_delBusy=true;
+ const TOKEN=new URLSearchParams(location.search).get('token')||'';
+ try{_delData=await (await fetch('/api/deletions'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''))).json()}catch(e){_delBusy=false;el.innerHTML='<div class="sub">fetch failed: '+esc(''+e)+'</div>';return}
+ _delBusy=false;paintDeletions();
+}
+document.getElementById('deletions').addEventListener('click',function(e){
+ const t=e.target.closest('[data-del]');if(!t)return;
+ const a=t.dataset.del;
+ if(a==='exec'){_delExecOnly=!_delExecOnly;paintDeletions();}
+ else if(a==='repo'){var nm=t.dataset.repo||'';_delRepo=(_delRepo===nm?'':nm);paintDeletions();}
+ else if(a==='refresh'){renderDeletionsView(true);}
+ else if(a==='toggle'){var x=document.getElementById('delx_'+t.dataset.i);if(x)x.style.display=x.style.display==='none'?'':'none';}
+});
+// ---- recap view: on-demand history aggregation, NEVER background-polled ----
+let _recapBusy=false,_recapData=null,_recapWindow='7d';
+const _RCPWIN=[['today','今天'],['3d','過去 3 天'],['7d','過去 7 天']];
+function fmtTok(n){n=n||0;
+ if(n>=1e9)return (n/1e9).toFixed(2)+'B';
+ if(n>=1e6)return (n/1e6).toFixed(2)+'M';
+ if(n>=1e3)return (n/1e3).toFixed(1)+'k';
+ return ''+n;}
+function money(x){return '$'+(x||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function paintRecap(){
+ const el=document.getElementById('recap'),d=_recapData;if(!d)return;
+ let h='<div class="toolbar" style="margin-bottom:10px">';
+ h+=_RCPWIN.map(([k,t])=>'<span class="chip '+(_recapWindow===k?'on':'')+'" data-rcp="win" data-win="'+k+'"><span class="led"></span>'+t+'</span>').join('');
+ h+='<span class="chip '+(PREFS.recapMac?'on':'')+'" data-rcp="mac"><span class="led"></span>🍎 含 Mac</span>';
+ h+='<span class="chip '+(PREFS.recapOffice?'on':'')+'" data-rcp="office"><span class="led"></span>🏢 含遠端</span>';
+ h+='<span class="chip" data-rcp="refresh">🔄 重跑</span>';
+ const srcTxt=(d.sources||['win']).map(s=>s==='mac'?'🍎Mac':'🪟Win').join('+');
+ h+='<span class="sub" style="margin-left:auto">'+(d.error?('<span style="color:#f85149">'+esc(d.error)+'</span>'):('來源 '+srcTxt+' · 🗓 '+esc(d.range)+' · 重算於 '+esc((d.generated||'').slice(11))))+'</span></div>';
+ if(d.error){el.innerHTML=h;return;}
+ const tk=d.tokens||{};
+ h+='<div class="grid">';
+ h+='<div class="card" data-cid="recap:summary"><h2>📊 '+esc(d.label)+' 彙總<span class="sub">'+esc(d.range)+'</span></h2><table>'+
+   '<tr><td class="l">總 token</td><td class="ctx" style="color:#e6edf3;font-weight:600">'+fmtTok(d.total_tokens)+'</td></tr>'+
+   '<tr><td class="l">API 等值花費<span class="sub" title="list-price 快照 '+esc(d.prices_snapshot||'')+'；訂閱制下非實際支出"> (≈)</span></td><td class="ctx" style="color:#3fb950;font-weight:600">'+money(d.total_cost_usd)+'</td></tr>'+
+   '<tr><td class="l">活躍時間</td><td class="ctx">'+(d.active_min||0).toFixed(0)+' 分 ('+((d.active_min||0)/60).toFixed(1)+' h)</td></tr>'+
+   '<tr><td class="l">assistant 回合</td><td class="ctx">'+(d.assistant_turns||0).toLocaleString()+'</td></tr></table>'+
+   ((d.unpriced_models||[]).length?'<div class="note" style="color:#d29922">⚠ 未計入花費（價目表沒有這些模型）：'+esc((d.unpriced_models||[]).join('、'))+'</div>':'')+
+   (function(){var q=d.cache_creation_ttl||{};if(!q.h1&&!q.m5&&!q.unsplit)return '';return '<div class="note">cache 寫入 TTL：1h '+fmtTok(q.h1||0)+'（2×）· 5m '+fmtTok(q.m5||0)+'（1.25×）'+((q.unsplit||0)?' · 無 TTL 標記 '+fmtTok(q.unsplit)+'（依 1.25× 計）':'')+((q.mismatch_turns||0)?' · <span style="color:#d29922">'+q.mismatch_turns+' 回合子物件與合計不符</span>':'')+'</div>';})()+
+   '<div class="note">input '+fmtTok(tk.input)+' · cache 寫 '+fmtTok(tk.cache_creation)+' · cache 讀 '+fmtTok(tk.cache_read)+' · output '+fmtTok(tk.output)+'</div>'+
+   (d.offices||[]).map(function(o){var M=((LAST&&LAST.machines)||{})[o.machine]||{};var lbl=(M.icon||'🏢')+' '+(M.label||o.machine);
+     return '<div class="note" style="color:'+(M.fg||'#f0c674')+'">'+lbl+' 7d：'+money(o.total_cost_usd)+' · '+fmtTok(o.total_tokens)+' tokens'+(o.per_project_total?'（明細前 '+(d.per_project||[]).filter(function(p){return p.os===o.machine}).length+'/'+o.per_project_total+' 大專案）':'')+(o.stale?' · ⚠ '+Math.round((o.age_sec||0)/60)+'m 前（離線）':'')+'</div>';}).join('')+
+   (d.office_note?'<div class="note" style="color:#d29922">🏢 '+esc(d.office_note)+'</div>':'')+
+   '</div>';
+ h+='<div class="card" data-cid="recap:models"><h2>🤖 各模型<span class="sub">'+(d.by_model||[]).length+'</span></h2><table>'+
+   (d.by_model||[]).map(m=>'<tr><td class="l">'+esc(m.model)+' <span class="sub">'+(m.turns||0)+' 回</span></td><td class="ctx">'+fmtTok(m.tokens)+'</td><td class="ctx" style="color:#3fb950">'+(m.cost==null?'<span title="此模型不在價目表中，未計入上方花費">?</span>':money(m.cost))+'</td></tr>').join('')+
+   '</table></div></div>';
+ var sess=d.per_session||[];
+ if(sess.length){h+='<div class="card" data-cid="recap:sessions" style="margin-top:12px"><h2>🔥 各 session token 消耗<span class="sub">前 '+sess.length+' / 共 '+(d.per_session_total||sess.length)+'</span></h2><table>'+
+   sess.map(function(s){return '<tr><td class="l">'+esc(s.project)+' <span class="sub">'+(s.os&&s.os!=='win'?esc(s.os)+' · ':'')+esc(String(s.session).slice(0,8))+' · '+(s.turns||0)+' 回</span></td>'+'<td class="ctx">'+fmtTok(s.tokens)+'</td>'+'<td class="ctx">'+tokBadge(s.avg_turn_reread)+'</td></tr>';}).join('')+
+   '</table><div class="note">中欄＝該 session 全部 token（含 output）；右欄＝每輪平均<b>重讀</b>量（不含 output，與左表徽章同一把尺）。成本以 token 計而非美元：訂閱制下美元只是牌價換算，且目前有模型無牌價。</div></div>';}
+ const projs=d.per_project||[];
+ h+='<div class="card" data-cid="recap:projects" style="margin-top:12px"><h2>📁 各專案活躍時間占比<span class="sub">'+projs.length+'</span></h2><table>'+
+   projs.map(p=>{var mi=((LAST&&LAST.machines)||{})[p.os];return '<tr><td class="l" style="min-width:150px">'+(mi?mi.icon+' ':'')+esc(p.project)+' <span class="sub">'+(p.sessions||0)+' sess</span></td>'+
+   '<td style="width:100%"><div class="bartrack" style="background:#21262d;border-radius:4px;overflow:hidden;height:14px"><div style="background:#388bfd;height:14px;width:'+Math.max(2,p.pct||0)+'%"></div></div></td>'+
+   '<td class="ctx" style="white-space:nowrap">'+(p.active_min||0).toFixed(0)+'m · '+(p.pct||0).toFixed(1)+'%</td></tr>';}).join('')+
+   '</table></div>';
+ const tprojs=projs.slice().sort((a,b)=>(b.tokens||0)-(a.tokens||0));
+ h+='<div class="card" data-cid="recap:projtokens" style="margin-top:12px"><h2>📁 各專案 token 佔比<span class="sub">'+tprojs.length+'</span></h2><table>'+
+   tprojs.map(p=>{var mi=((LAST&&LAST.machines)||{})[p.os];return '<tr><td class="l" style="min-width:150px">'+(mi?mi.icon+' ':'')+esc(p.project)+' <span class="sub">'+(p.sessions||0)+' sess</span></td>'+
+   '<td style="width:100%"><div class="bartrack" style="background:#21262d;border-radius:4px;overflow:hidden;height:14px"><div style="background:#a371f7;height:14px;width:'+(p.tokens?Math.max(2,p.tok_pct||0):0)+'%"></div></div></td>'+
+   '<td class="ctx" style="white-space:nowrap">'+fmtTok(p.tokens)+' · '+(p.tok_pct||0).toFixed(1)+'%</td></tr>';}).join('')+
+   '</table><div class="note">時間榜按活躍時間排序，這張按 token 排序 — 名次不同就是「花時間」與「花 token」的落差。子代理的 token 記在它所屬專案。</div></div>';
+ const days=d.per_day||[],maxd=Math.max(1,...days.map(x=>x.tokens||0));
+ h+='<div class="card" data-cid="recap:daily" style="margin-top:12px"><h2>📅 每日 token 分佈<span class="sub">'+days.length+' 天</span></h2><table>'+
+   days.map(x=>'<tr><td class="l" style="white-space:nowrap">'+esc(x.day)+'</td>'+
+   '<td style="width:100%"><div class="bartrack" style="background:#21262d;border-radius:4px;overflow:hidden;height:14px"><div style="background:#a371f7;height:14px;width:'+(x.tokens?Math.max(2,x.tokens/maxd*100):0)+'%"></div></div></td>'+
+   '<td class="ctx" style="white-space:nowrap">'+fmtTok(x.tokens)+' · '+(x.turns||0)+' 回</td></tr>').join('')+
+   '</table><div class="note">資料來源 ~/.claude/projects · on-demand 計算，不背景輪詢。</div></div>';
+ el.innerHTML=h;
+ enableKeyboardControls(el);
+ applyCollapse(el);
+}
+async function renderRecap(force){
+ const el=document.getElementById('recap');
+ if(!force&&_recapData)return;   // already loaded — NEVER auto-refetch on a poll tick
+ if(_recapBusy)return;_recapBusy=true;
+ if(!_recapData)el.innerHTML='<div class="sub">計算中…</div>';
+ const TOKEN=new URLSearchParams(location.search).get('token')||'';
+ try{_recapData=await (await fetch('/api/recap?window='+encodeURIComponent(_recapWindow)+(PREFS.recapMac?'&mac=1':'')+(PREFS.recapOffice?'&office=1':'')+(TOKEN?'&token='+encodeURIComponent(TOKEN):''))).json()}
+ catch(e){_recapBusy=false;el.innerHTML='<div class="sub">fetch failed: '+esc(''+e)+'</div>';return}
+ _recapBusy=false;paintRecap();
+}
+document.getElementById('recap').addEventListener('click',function(e){
+ const t=e.target.closest('[data-rcp]');if(!t)return;
+ if(t.dataset.rcp==='win'){_recapWindow=t.dataset.win;renderRecap(true);}
+ else if(t.dataset.rcp==='mac'){PREFS.recapMac=PREFS.recapMac?0:1;savePrefs();renderRecap(true);}
+ else if(t.dataset.rcp==='office'){PREFS.recapOffice=PREFS.recapOffice?0:1;savePrefs();renderRecap(true);}
+ else if(t.dataset.rcp==='refresh'){renderRecap(true);}
+});
+// ---- cockpit view (option C): branded live-card grid, own light poll ----
+let _ckLoop=false,_ckBusy=false,_ckMs=6000,_ckLast=null;
+function ckSkeleton(){  // branded first-load placeholder — never a blank flash (UX-006)
+ return '<div class="ckgrid">'+[0,1,2].map(function(){return '<div class="ckcard" style="opacity:.45"><div class="ckhd"><span class="dot idle"></span><b>載入中…</b></div><div class="ckmeta"><span class="chip">&nbsp;&nbsp;&nbsp;</span></div><div class="cktool"><span class="sub">連線中…</span></div></div>';}).join('')+'</div>';
+}
+function paintCockpit(d,banner){
+ const el=document.getElementById('cockpit'),cards=(d&&d.cards)||[];
+ const top=banner?'<div class="ckbanner">'+esc(banner)+'</div>':'';
+ if(!cards.length){el.innerHTML=top+'<div class="sub" style="padding:24px;text-align:center">— 目前沒有活躍的 agent —</div>';return;}
+ el.innerHTML=top+'<div class="ckgrid">'+cards.map(function(c){
+  const v=c.live||{},href='/session/'+encodeURIComponent(c.session_id)+(TOKEN?'?token='+encodeURIComponent(TOKEN):'');
+  const chips=[];
+  if(c.cc)chips.push('<span class="chip ckcc" title="wt cockpit 視窗裡這個 pane 的標題也是這個名字 — 要打字就找它">'+esc(c.cc)+'</span>');
+  if(c.pmode&&c.pmode!=='default')chips.push('<span class="chip">'+esc(c.pmode)+'</span>');
+  if(c.ctx!=null)chips.push(ctxBadge(c.ctx));  // threshold-coloured: a 95% agent pops, not flat grey
+  if(c.subagents)chips.push('<span class="chip" style="color:#d2b8ff;background:#a371f733">🔬'+c.subagents+'</span>');
+  if(c.wait_kind)chips.push('<span class="chip" style="color:#a371f7">'+esc(c.wait_kind==='question'?'❓ 問你':c.wait_kind==='plan_review'?'📋 審 plan':'💬 等你')+'</span>');
+  return '<a class="ckcard '+esc(c.status)+'" href="'+href+'">'+
+   '<div class="ckhd">'+dot(c.status)+'<b title="'+esc(c.label||'')+'">'+esc(c.label||'(untitled)')+'</b>'+
+     '<span class="cksrc" title="'+(c.source==='codex'?'Codex':'Claude Code')+'">'+(c.source==='codex'?'🟦':'🟧')+'</span></div>'+
+   '<div class="ckmeta">'+chips.join('')+'</div>'+
+   '<div class="cktool">'+(v.tool?((v.tool_done?'☑ ':'⚙ ')+esc(v.tool)+(v.target?' <span class="sub">→ '+esc(v.target)+'</span>':'')):'<span class="sub">— 無 tool 事件（tail 內）—</span>')+'</div>'+
+   (v.text?'<div class="cktxt">💬 '+esc(v.text)+'</div>':'')+
+   '<div class="ckft"><span class="sub">'+ago(c.ts)+' ago</span></div>'+
+  '</a>';}).join('')+'</div>';
+}
+async function renderCockpit(){
+ if(PREFS.view!=='cockpit'||document.hidden){_ckLoop=false;return;}  // owner exits -> loop dies
+ if(!_ckBusy){_ckBusy=true;
+  if(!_ckLast)document.getElementById('cockpit').innerHTML=ckSkeleton();  // first load only
+  try{const d=await (await fetch('/api/cockpit'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''))).json();
+   _ckMs=Math.max(3000,(d.poll_seconds||6)*1000);_ckLast=d;paintCockpit(d);}
+  catch(e){if(_ckLast)paintCockpit(_ckLast,'⚠ 重新連線中…');  // keep last-good cards, don't wipe (UX-008)
+   else document.getElementById('cockpit').innerHTML='<div class="sub" style="padding:16px">連線失敗，重試中… '+esc(''+e)+'</div>';}
+  _ckBusy=false;}
+ setTimeout(renderCockpit,_ckMs);
+}
+function startCockpit(){if(_ckLoop)return;_ckLoop=true;renderCockpit();}  // single-owner guard
+function render(d){if(!d)return;
+ document.getElementById('meta').innerHTML='updated '+esc(d.generated)+' · 自動更新 '+d.poll_seconds+'s &nbsp;&nbsp; 圖例: '+Object.keys(d.machines||{}).map(machineBadge).join('');
+ renderToolbar(d);renderAlert(d);
+ let view=PREFS.view;
+ const isCk=view==='cockpit',isOff=view==='office',isSvc=view==='services',isRcp=view==='recap',isDel=view==='deletions';
+ const hideMain=isCk||isOff||isSvc||isRcp||isDel;
+ document.getElementById('grid1').style.display=hideMain?'none':'';
+ document.getElementById('grid2').style.display=hideMain?'none':'';
+ document.getElementById('cockpit').style.display=isCk?'block':'none';
+ document.getElementById('office').style.display=isOff?'block':'none';
+ document.getElementById('services').style.display=isSvc?'block':'none';
+ document.getElementById('recap').style.display=isRcp?'block':'none';
+ document.getElementById('deletions').style.display=isDel?'block':'none';
+ if(isCk)startCockpit();else if(isOff)renderOffice(d);else if(isSvc)renderServices();else if(isRcp)renderRecap();else if(isDel)renderDeletionsView();else renderText(d);
+ applyTooltipLabels(document);
+}
+document.getElementById('toolbar').addEventListener('click',function(e){
+ const s=e.target.closest('[data-src]'),v=e.target.closest('[data-v]');
+ if(s){const k=s.dataset.src;PREFS.hidden[k]=PREFS.hidden[k]?0:1;savePrefs();render(LAST);}
+ else if(v){PREFS.view=v.dataset.v;savePrefs();render(LAST);}
+});
+// G2: presets launch / retry / close — delegated (cards re-render every poll)
+document.getElementById('grid2').addEventListener('click',async function(e){
+ const b=e.target.closest('.pbtn');if(!b)return;
+ if(b.dataset.kb==='retry'){_kbError='';loadKbToday();return;}
+ if(b.classList.contains('xclose')){
+  if(!confirm('關閉 session '+b.dataset.token+'？（mark-only、不強殺）'))return;
+  try{const r=await opsPost('/api/ops/close',{token:b.dataset.token});alert((r.ok?'✓ ':'✗ ')+(r.msg||(r.ok?'closed':'failed')));}
+  catch(err){alert('✗ '+err);}
+  tick();return;}
+ const body={preset:b.dataset.preset,launch_id:(crypto.randomUUID?crypto.randomUUID():(''+Date.now()+'-'+Math.floor(Math.random()*1e9)))};
+ if(b.dataset.idx!=null&&b.dataset.idx!=='')body.agent_idx=+b.dataset.idx;
+ if(!confirm('Launch preset「'+b.dataset.preset+'」'+(body.agent_idx!=null?'（重試 agent #'+body.agent_idx+'）':'')+'？會開新 wt 分頁。'))return;
+ b.disabled=true;
+ try{const r=await opsPost('/api/ops/launch_preset',body);alert((r.ok?'✓ ':'✗ ')+(r.msg||(r.ok?'queued':'failed')));}
+ catch(err){alert('✗ '+err);}
+ tick();
+});
+// Energy: poll + animate ONLY while the tab is visible. Hidden (other tab /
+// minimised) -> stop fetching and pause animations -> ~0 CPU/disk. TG alerts are
+// unaffected (driven server-side in alert_loop), so nothing is missed while away.
+let timer=null;
+async function tick(){
+ if(document.hidden)return;
+ const TOKEN=new URLSearchParams(location.search).get('token')||'';
+ let d;try{d=await (await fetch('/api/status'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''))).json()}catch(e){document.getElementById('meta').textContent='fetch failed, retrying… '+e;clearTimeout(timer);timer=setTimeout(tick,Math.min(pollMs,15000));return}
+ LAST=d;pollMs=(d.poll_seconds||60)*1000;
+ try{render(d)}catch(e){document.getElementById('meta').textContent='render error: '+e}
+ clearTimeout(timer);timer=setTimeout(tick,pollMs);  // reschedule even if render() threw — never freeze the loop
+}
+document.addEventListener('visibilitychange',function(){
+ document.body.classList.toggle('paused',document.hidden);
+ if(document.hidden){clearTimeout(timer);}else{tick();}
+});
+tick();
+</script></body></html>

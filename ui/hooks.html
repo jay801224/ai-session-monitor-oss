@@ -1,0 +1,380 @@
+<!doctype html><html lang="zh-TW"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hook 稽核 — AI Monitor</title><style>
+:root{color-scheme:dark}
+body{font:14px/1.5 -apple-system,Segoe UI,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:14px}
+h1{font-size:17px;margin:0 0 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+a{color:#58a6ff;text-decoration:none}
+.meta{color:#8b949e;font-size:12px;margin-bottom:12px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px 14px;margin-bottom:12px}
+.card h2{font-size:13px;font-weight:600;margin:0 0 8px;color:#e6edf3}
+.card[data-cid]>h2{cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none}
+.card[data-cid]>h2::before{content:'▾';color:#8b949e;font-size:10px;flex:none}
+.card.clps>h2::before{content:'▸'}
+.card.clps>*:not(h2){display:none}
+table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+td,th{padding:4px 5px;border-bottom:1px solid #21262d;vertical-align:middle}
+th{font-weight:600;color:#8b949e;font-size:11px;text-align:right;border-bottom:1px solid #30363d}
+th.l,td.l{text-align:left}
+.sub{color:#6e7681}
+.chip{display:inline-block;background:#21262d;border-radius:999px;padding:0 8px;font-size:11px;color:#8b949e;white-space:nowrap}
+.btn{border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-family:inherit;border:1px solid #30363d;background:#21262d;color:#c9d1d9}
+.btn:hover:not(:disabled){background:#30363d}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.on{color:#e6edf3;border-color:#58a6ff55;background:#1f6feb22}
+.err{color:#ff7b72}
+.note{color:#6e7681;font-size:11px;margin-top:8px;opacity:.9}
+.path{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:#8b949e;word-break:break-all}
+.zero{color:#30363d}
+.mono{font-family:ui-monospace,Consolas,monospace}
+.strip{display:flex;gap:2px;margin-top:6px;flex-wrap:wrap}
+.strip i{width:9px;height:11px;border-radius:2px;border:1px solid #30363d;display:block}
+.strip i.has{background:#3fb950;border-color:#3fb950}
+.strip i.late{background:#d29922;border-color:#d29922}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#8b949e;margin-bottom:8px}
+.legend b{font-weight:600}
+.dotk{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.delta{display:flex;gap:16px;flex-wrap:wrap;align-items:baseline;font-variant-numeric:tabular-nums;
+       background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:8px 12px;margin-bottom:10px}
+.delta b{font-size:16px;color:#e6edf3;font-weight:600}
+.acard{border-left:3px solid #d29922}
+svg{display:block;max-width:100%}
+</style></head><body>
+<h1>🪝 Hook 稽核 <a href="/" id="back">← dashboard</a>
+  <button class="btn" id="rescan">↻ 立即重新掃描</button></h1>
+<div class="meta" id="head">loading…</div>
+<div id="picker"></div>
+<div id="today"></div>
+<div id="charts"></div>
+<div id="matrix"></div>
+<div id="events"></div>
+<div id="findings"></div>
+<script>
+const TOKEN=new URLSearchParams(location.search).get('token')||'';
+if(TOKEN)document.getElementById('back').href='/?token='+encodeURIComponent(TOKEN);
+function esc(s){return (s==null?'':''+s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+// A deployed metric is NEVER coerced with `|| 0` — a missing snapshot must read
+// as "—", not as "deployment dropped to zero".
+function num(v){return v==null?'—':(''+v).replace(/\B(?=(\d{3})+(?!\d))/g,',')}
+
+// custody colours identify STATES, they do not rank severity. Red is reserved
+// for crit elsewhere in this dashboard; using it here would be the tool passing
+// judgement, which is exactly what the owner asked it not to do.
+var CUSTODY=[
+ ['current',  '#3fb950','統一列管','內容等同母本現行版'],
+ ['behind',   '#d29922','落後未部署','母本歷史有這份內容，只是還沒部署'],
+ ['behind_other_path','#c9a227','落後(異名)','內容只在母本的另一個檔名下出現過'],
+ ['divergent','#a371f7','本地手改','母本完整歷史從未有過這份內容'],
+ ['local',    '#58a6ff','各自管','母本沒有這個檔'],
+ ['missing',  '#8b949e','契約未達成','manifest 宣告要有，部署端沒有'],
+ ['absent',   '#484f58','母本有/未部署','此面無 manifest 契約，僅供參考'],
+ ['unknown',  '#484f58','無法判定','母本不可用時不臆測'],
+];
+var CCOL={},CNAME={};CUSTODY.forEach(c=>{CCOL[c[0]]=c[1];CNAME[c[0]]=c[2]});
+
+// ---------- date helpers (local calendar, never UTC via toISOString) ----------
+function ymd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function domainDays(n){var out=[],t=new Date();
+ for(var i=n-1;i>=0;i--){var d=new Date(t.getFullYear(),t.getMonth(),t.getDate()-i);out.push(ymd(d));}
+ return out;}
+
+// ---------- chart ----------
+var CW=900,CH=160,PADL=52,PADR=14,PADT=12,PADB=22;
+function xOf(i,n){return PADL+(n<2?0:(CW-PADL-PADR)*i/(n-1))}
+function chart(o){
+ var dom=o.domain,n=dom.length;
+ var vals=[];dom.forEach(function(d){var a=o.src[d],b=o.dep[d];if(a!=null)vals.push(a);if(b!=null)vals.push(b);});
+ if(!vals.length)return '<div class="sub">— 無資料 —</div>';
+ var lo=Math.min.apply(null,vals),hi=Math.max.apply(null,vals);
+ if(o.integer){lo=Math.max(0,lo-1);hi=hi+1;}else{var pad=(hi-lo)*0.15||1;lo=Math.max(0,lo-pad);hi=hi+pad;}
+ if(hi===lo)hi=lo+1;
+ var yOf=function(v){return PADT+(CH-PADT-PADB)*(1-(v-lo)/(hi-lo))};
+
+ // path that BREAKS at gaps: <polyline> cannot express a hole, and a hole is an
+ // expected state here (a day the machine was never on).
+ function seg(map,step){var d='',pen=false;
+  for(var i=0;i<n;i++){var v=map[dom[i]];
+   if(v==null){pen=false;continue;}
+   var px=xOf(i,n).toFixed(1),py=yOf(v).toFixed(1);
+   if(!pen){d+='M'+px+' '+py;pen=true;}
+   else if(step){d+='H'+px+'V'+py;}
+   else{d+='L'+px+' '+py;}}
+  return d;}
+
+ var h='<svg viewBox="0 0 '+CW+' '+CH+'" role="img" aria-label="'+esc(o.title)+'">';
+ h+='<defs><pattern id="nodata'+o.key+'" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">'
+   +'<line x1="0" y1="0" x2="0" y2="6" stroke="#8b949e" stroke-width="1" opacity=".16"/></pattern></defs>';
+
+ // y grid
+ for(var t=0;t<=2;t++){var v=lo+(hi-lo)*t/2,py=yOf(v);
+  var lab=o.integer?Math.round(v):Math.round(v);
+  h+='<line x1="'+PADL+'" y1="'+py.toFixed(1)+'" x2="'+(CW-PADR)+'" y2="'+py.toFixed(1)+'" stroke="#21262d"/>'
+    +'<text x="'+(PADL-6)+'" y="'+(py+3.5).toFixed(1)+'" text-anchor="end" font-size="10" fill="#6e7681">'+num(lab)+'</text>';}
+
+ // the region before the deployed line exists is POSITIVELY marked as
+ // "no data", never left blank — blank reads as zero.
+ var si=o.since?dom.indexOf(o.since):-1;
+ if(si>0){var xw=xOf(si,n);
+  h+='<rect x="'+PADL+'" y="'+PADT+'" width="'+(xw-PADL).toFixed(1)+'" height="'+(CH-PADT-PADB)+'" fill="url(#nodata'+o.key+')"/>'
+    +'<line x1="'+xw.toFixed(1)+'" y1="'+PADT+'" x2="'+xw.toFixed(1)+'" y2="'+(CH-PADB)+'" stroke="#8b949e" stroke-dasharray="3 3"/>'
+    +'<text x="'+(xw-7).toFixed(1)+'" y="'+(PADT+13)+'" text-anchor="end" font-size="10.5" fill="#8b949e">部署快照自 '+esc(o.since)+' 起 · 此前不可回溯 ▸</text>';}
+ else if(si<0&&o.since==null){
+  h+='<rect x="'+PADL+'" y="'+PADT+'" width="'+(CW-PADL-PADR)+'" height="'+(CH-PADT-PADB)+'" fill="url(#nodata'+o.key+')"/>'
+    +'<text x="'+((CW+PADL)/2)+'" y="'+(PADT+16)+'" text-anchor="middle" font-size="10.5" fill="#8b949e">尚無任何部署快照</text>';}
+
+ h+='<path d="'+seg(o.src,o.step)+'" fill="none" stroke="#58a6ff" stroke-width="1.8"/>';
+ h+='<path d="'+seg(o.dep,o.step)+'" fill="none" stroke="#3fb950" stroke-width="1.8" stroke-dasharray="5 3"/>';
+
+ // Every deployed day gets a visible dot — with a single snapshot a <path> of
+ // one point draws nothing at all, which reads as "the feature is broken".
+ // The transparent r=11 circle carries the readout and the touch target.
+ for(var i=0;i<n;i++){
+  var day=dom[i],dv=o.dep[day],sv=o.src[day],px=xOf(i,n).toFixed(1);
+  var tip=day+'　母本 '+num(sv)+'　部署 '+num(dv)
+        +(sv!=null&&dv!=null?'　差 '+(dv-sv>0?'+':'')+(dv-sv):'');
+  if(dv!=null){
+   h+='<circle cx="'+px+'" cy="'+yOf(dv).toFixed(1)+'" r="2.6" fill="#3fb950"/>';
+  }else if(si>=0&&i>si){
+   // inside the covered range but no snapshot: a hollow marker on the axis, so
+   // the hole is stated rather than silently interpolated.
+   h+='<circle cx="'+px+'" cy="'+(CH-PADB)+'" r="2.4" fill="#0d1117" stroke="#8b949e"/>';}
+  h+='<circle cx="'+px+'" cy="'+(CH/2)+'" r="11" fill="transparent"><title>'+esc(tip)+'</title></circle>';}
+
+ // x labels: first / middle / last
+ [0,Math.floor((n-1)/2),n-1].forEach(function(i,k){
+  h+='<text x="'+xOf(i,n).toFixed(1)+'" y="'+(CH-6)+'" text-anchor="'+(k===0?'start':k===2?'end':'middle')
+    +'" font-size="10" fill="#6e7681">'+esc((dom[i]||'').slice(5))+'</text>';});
+ h+='</svg>';
+ return h;}
+
+// ---------- renderers ----------
+function renderCharts(d){
+ var dom=domainDays(d.window_days||30);
+ var srcL={},srcF={},depL={},depF={};
+ (d.source_history||[]).forEach(function(p){srcL[p.date]=p.lines;srcF[p.date]=p.files;});
+ (d.deployed_history||[]).forEach(function(p){depL[p.date]=p.distinct_lines;depF[p.date]=p.distinct_files;});
+ var since=d.deployed_since||null;
+ var h='<div class="card" data-cid="hooks:charts"><h2>📈 近 '+(d.window_days||30)+' 天</h2>'
+  +'<div class="legend">'
+  +'<span><span class="dotk" style="background:#58a6ff"></span>母本（hooks_source_repo，git 可回溯）</span>'
+  +'<span><span class="dotk" style="background:#3fb950"></span>部署（本機實況，僅能從啟用日往後累積）</span>'
+  +'<span class="sub">部署線畫的是<b>去重後的相異內容</b>，才與母本同一量級——實際檔案是同一批母本檔 fan-out 到各 repo。</span>'
+  +'</div>';
+ if(d.source&&d.source.available===false)
+  h+='<div class="sub err" style="margin-bottom:6px">母本曲線不可用：'+esc(d.source.note||'未知原因')+'</div>';
+ h+='<div class="sub" style="margin:2px 0">HOOK 總行數</div>'+chart({key:'l',title:'總行數',domain:dom,src:srcL,dep:depL,since:since})
+  +'<div class="sub" style="margin:10px 0 2px">檔案總數</div>'
+  // step, not a diagonal: the count changes AT a commit, it does not grow
+  // linearly overnight.
+  +chart({key:'f',title:'檔案總數',domain:dom,src:srcF,dep:depF,since:since,integer:true,step:true})
+  +'</div>';
+ return h;}
+
+function renderToday(d){
+ var t=d.today||{},tot=t.totals||[];
+ var sh=(d.source_history||[]),last=sh.length?sh[sh.length-1]:null;
+ // Only the claude surfaces have a counterpart in the source repo; comparing the
+ // codex / antigravity surfaces against a母本 that never contained them would
+ // manufacture a difference out of nothing. They are reported, just not differenced.
+ var cl=tot.filter(function(x){return x.vendor==='claude'});
+ var other=tot.filter(function(x){return x.vendor!=='claude'});
+ var dl=cl.reduce(function(a,x){return a+(x.distinct_lines||0)},0);
+ var df=cl.reduce(function(a,x){return a+(x.distinct_files||0)},0);
+ var rawf=tot.reduce(function(a,x){return a+(x.files||0)},0);
+ var rawl=tot.reduce(function(a,x){return a+(x.lines||0)},0);
+ var ol=other.reduce(function(a,x){return a+(x.lines||0)},0);
+ var sl=last?last.lines:null,sf=last?last.files:null;
+ // This strip is correct from day one, unlike the 30-day series. It stays even
+ // once the chart fills in — it is the answer the owner actually wants.
+ return '<div class="delta">'
+  +'<span class="sub">今日對照 <span title="母本 repo 只涵蓋 Claude 的 hook；codex / antigravity 那些面在母本裡沒有對應物，不參與相減">(Claude 面)</span></span>'
+  +'<span>母本 <b>'+num(sl)+'</b> 行 / <b>'+num(sf)+'</b> 檔</span>'
+  +'<span>部署(去重) <b>'+num(dl)+'</b> 行 / <b>'+num(df)+'</b> 檔</span>'
+  +(sl!=null&&dl!=null?'<span class="sub">差 '+(dl-sl>0?'+':'')+num(dl-sl)+' 行</span>':'')
+  +'<span class="sub">實際落地 '+num(rawl)+' 行 / '+num(rawf)+' 檔（fan-out 後）</span>'
+  +(ol?'<span class="sub">母本未涵蓋 '+num(ol)+' 行（codex / antigravity）</span>':'')
+  +'<span class="sub" style="margin-left:auto">掃描於 '+esc(t.captured_at||'—')+'</span>'
+  +'</div>';}
+
+var SORTBAD=false;
+function renderMatrix(d){
+ var rows=(d.today&&d.today.rows)||[];
+ var byRepo={};
+ rows.forEach(function(r){
+  var k=r.repo||'?';
+  var s=byRepo[k]||(byRepo[k]={repo:k,counts:{},files:0,lines:0,opted:false,unlinked:0,detail:[]});
+  if(r.opted_out)s.opted=true;
+  (r.files||[]).forEach(function(f){s.counts[f.custody]=(s.counts[f.custody]||0)+1;s.files++;s.lines+=f.lines||0;
+   // The LINK axis is independent of the content axis: a file can be byte-identical
+   // to the source and still have lost its hardlink. That is the state the owner
+   // originally called 脫鉤, and it is invisible if you only look at custody.
+   if(f.link_expected&&f.link==='copy')s.unlinked++;
+   s.detail.push({n:f.name,c:f.custody,l:f.lines,link:f.link,le:f.link_expected,b:f.behind_by_days,sf:r.surface});});
+  (r.missing||[]).forEach(function(m){s.counts[m.custody]=(s.counts[m.custody]||0)+1;
+   s.detail.push({n:m.name,c:m.custody,l:null,sf:r.surface});});});
+ var list=Object.keys(byRepo).map(function(k){return byRepo[k]});
+ // Default order is repo name: stable across refreshes and aligned with how the
+ // architecture diagram is read. The "problems first" order is a button the
+ // human presses — an automatic ranking would be the tool deciding.
+ list.sort(function(a,b){return a.repo<b.repo?-1:a.repo>b.repo?1:0});
+ if(SORTBAD)list.sort(function(a,b){
+  var f=function(x){return (x.counts.divergent||0)+(x.counts.missing||0)+(x.counts.behind||0)+(x.counts.behind_other_path||0)};
+  return f(b)-f(a)||(a.repo<b.repo?-1:1)});
+ var cols=['current','behind','behind_other_path','divergent','local','missing','absent','unknown'];
+ var h='<div class="card" data-cid="hooks:matrix"><h2>🧾 各 repo 列管狀態（'+list.length+' 個主工作區 · 已排除 worktree）</h2>'
+  +'<div class="legend">'+CUSTODY.map(function(c){
+    return '<span title="'+esc(c[3])+'"><span class="dotk" style="background:'+c[1]+'"></span><b>'+esc(c[2])+'</b> <span class="sub">'+esc(c[0])+'</span></span>'}).join('')
+  +'<span title="連結軸，與內容無關：manifest 宣告應為 hardlink，實際已是獨立副本"><span class="dotk" style="background:#e3b341"></span><b>脫鉤</b> <span class="sub">內容可能仍一致</span></span>'
+  +'</div>'
+  +'<div style="margin-bottom:6px"><button class="btn'+(SORTBAD?' on':'')+'" id="sortbad">⇅ 非 current 排前面</button></div>'
+  +'<table><tr><th class="l">repo</th>'
+  +cols.map(function(c){return '<th title="'+esc((CUSTODY.find(function(x){return x[0]===c})||[])[3]||'')+'">'+esc(CNAME[c]||c)+'</th>'}).join('')
+  +'<th title="manifest 宣告此面應為 hardlink，但這些檔已是獨立副本。內容可能完全一致——這是連結軸，不是內容軸。">脫鉤</th>'
+  +'<th>行數</th><th class="l" style="width:70px">分佈</th></tr>';
+ list.forEach(function(s){
+  var tot=cols.reduce(function(a,c){return a+(s.counts[c]||0)},0)||1;
+  var bar='';cols.forEach(function(c){var v=s.counts[c]||0;if(v)bar+='<span style="display:inline-block;height:7px;width:'+(100*v/tot).toFixed(1)+'%;background:'+CCOL[c]+'"></span>';});
+  h+='<tr data-repo="'+esc(s.repo)+'" style="cursor:pointer"><td class="l">'+esc(s.repo)
+    +(s.opted?' <span class="chip" title="此 repo 帶 .no-mcs-onboard，已退出同步；仍會盤點它實際部署了什麼，但不斷言它「缺」什麼">退出同步</span>':'')+'</td>'
+   +cols.map(function(c){var v=s.counts[c]||0;
+     return '<td'+(v?' style="color:'+CCOL[c]+';font-weight:600"':' class="zero"')+'>'+(v||'·')+'</td>'}).join('')
+   +'<td'+(s.unlinked?' style="color:#e3b341;font-weight:600"':' class="zero"')+'>'+(s.unlinked||'·')+'</td>'
+   +'<td>'+num(s.lines)+'</td>'
+   +'<td class="l"><span style="display:block;width:64px;line-height:0;border-radius:2px;overflow:hidden;background:#21262d">'+bar+'</span></td></tr>'
+   +'<tr class="det" data-det="'+esc(s.repo)+'" hidden><td colspan="'+(cols.length+4)+'" class="sub" style="padding:6px 10px">'
+   +s.detail.filter(function(x){return x.c!=='current'||(x.le&&x.link==='copy')}).map(function(x){
+      return '<div><span class="dotk" style="background:'+CCOL[x.c]+'"></span><span class="mono">'+esc(x.n)+'</span> '
+        +'<span class="chip">'+esc(CNAME[x.c]||x.c)+'</span> <span class="sub">'+esc(x.sf)+'</span>'
+        +(x.b!=null?' <span class="sub">落後 '+x.b+' 天</span>':'')
+        +(x.le&&x.link==='copy'?' <span class="chip" title="manifest 宣告此面應為 hardlink，但這支已斷鏈（內容仍可能一致）">已斷鏈</span>':'')
+        +'</div>'}).join('')
+   +'<div class="sub" style="margin-top:4px">（只列非 current 或已斷鏈者；其餘 current '+Math.max(0,(s.counts.current||0)-s.unlinked)+' 支未展開）</div>'
+   +'</td></tr>';});
+ h+='</table><div class="note">列管狀態只描述事實，不判定違規——請對照架構圖自行判讀。'
+   +'<b>落後未部署</b>＝母本歷史有這份內容（通常就是還沒同步）；<b>本地手改</b>＝母本完整歷史從未有過這份內容。點一列可展開檔名。</div></div>';
+ return h;}
+
+function renderEvents(d){
+ var tot=(d.today&&d.today.totals)||[];
+ var h='<div class="card" data-cid="hooks:events"><h2>⚡ 宣告了哪些 hook event（設定面）</h2>'
+  +'<table><tr><th class="l">vendor / scope</th><th class="l">events</th><th>檔</th><th>行</th></tr>';
+ tot.forEach(function(t){
+  h+='<tr><td class="l">'+esc(t.key)+'</td><td class="l">'
+   +(t.events&&t.events.length?t.events.map(function(e){return '<span class="chip" style="margin:1px 2px">'+esc(e)+'</span>'}).join(''):'<span class="sub">—</span>')
+   +'</td><td>'+num(t.files)+'</td><td>'+num(t.lines)+'</td></tr>';});
+ h+='</table>';
+ var nh=(d.today&&d.today.no_hook_surfaces)||[];
+ if(nh.length){h+='<div class="note">已檢查但<b>沒有 hook 面</b>的廠商（列出來，才不會跟「忘了看」長得一樣）：'
+  +nh.map(function(s){return '<div>· <b>'+esc(s.vendor)+'</b> — '+esc(s.note)+' <span class="path">'+esc(s.checked_path)+'</span>'
+    +(s.checked_exists?'':' <span class="chip">檔案不存在</span>')+'</div>'}).join('')+'</div>';}
+ return h+'</div>';}
+
+function renderFindings(d){
+ var rows=(d.today&&d.today.rows)||[],h='';
+ var refs=[];rows.forEach(function(r){(r.broken_refs||[]).forEach(function(b){refs.push({repo:r.repo,by:b.by,ref:b.ref,dir:r.path})})});
+ if(refs.length){h+='<div class="card acard"><h2>🔗 已部署的 script 找不到它引用的同層檔案（'+refs.length+'）</h2>'
+  +refs.map(function(x){return '<div><span class="mono">'+esc(x.by)+'</span> → <span class="mono err">'+esc(x.ref)+'</span> <span class="sub">'+esc(x.repo)+'</span><div class="path">'+esc(x.dir)+'</div></div>'}).join('')
+  +'<div class="note">這是「hook 指著一個沒被部署出去的檔案」——執行期才會炸，靜態看檔案清單看不出來。</div></div>';}
+ var miss=[];rows.forEach(function(r){(r.missing||[]).forEach(function(m){if(m.custody==='missing')miss.push({repo:r.repo,n:m.name,sf:r.surface,c:r.contract})})});
+ if(miss.length){var byName={};miss.forEach(function(m){(byName[m.n]=byName[m.n]||[]).push(m.repo)});
+  h+='<div class="card" data-cid="hooks:missing"><h2>📉 manifest 契約未達成（'+miss.length+' 筆）</h2><table>'
+   +Object.keys(byName).sort().map(function(n){return '<tr><td class="l mono">'+esc(n)+'</td><td class="l sub">'+byName[n].length+' 個 repo 沒有：'+esc(byName[n].join('、'))+'</td></tr>'}).join('')
+   +'</table><div class="note">只列有 manifest 契約宣告的面（'+esc((miss[0]||{}).c||'')+'）。沒有契約宣告的面不會出現在這裡——「母本有你沒有」在沒有契約時是不可證的斷言。</div></div>';}
+ var un=(d.today&&d.today.unavailable)||[];
+ if(un.length)h+='<div class="card acard"><h2>⚠ 掃描不到（不記為 0）</h2>'
+  +un.map(function(u){return '<div class="sub">'+esc(u.repo)+' / '+esc(u.surface)+' — '+esc(u.error)+'</div>'}).join('')
+  +'<div class="note">快照是永久歷史，掃不到就標不可用，絕不寫成 0。</div></div>';
+ return h;}
+
+function renderPicker(d){
+ var dom=domainDays(d.window_days||30);
+ var have={};(d.deployed_history||[]).forEach(function(p){have[p.date]=p});
+ var h='<div class="card"><h2>📅 回查指定日期</h2>'
+  +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+  +'<input type="date" id="date" class="btn" min="'+dom[0]+'" max="'+dom[dom.length-1]+'" value="'+esc(d.date||'')+'">'
+  +(d.date?'<button class="btn" id="clrdate">✕ 回到總覽</button>':'')
+  +'<span class="sub">實心＝有部署快照、空心＝僅母本可回溯</span></div>'
+  +'<div class="strip">'+dom.map(function(day){var p=have[day];
+     return '<i class="'+(p?'has':'')+'" title="'+esc(day+(p?'　部署快照 '+(p.captured_at||''):'　無部署快照'))+'"></i>'}).join('')+'</div>';
+ if(d.date){
+  var s=d.date_source,dep=d.date_deployed,rsn=d.date_deployed_reason||{};
+  h+='<div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">'
+   +'<div class="card" style="flex:1;min-width:250px;margin:0"><h2>母本 · '+esc(d.date)+'</h2>'
+   +(s?'<div><b>'+num(s.lines)+'</b> 行 / <b>'+num(s.files)+'</b> 檔 <span class="sub">commit '+esc(s.commit)+'</span></div>'
+      :'<div class="sub">— 該日無 commit 資料 —</div>')+'</div>'
+   // The no-snapshot card occupies the SAME slot as the data card, and states
+   // WHICH kind of absence it is — structural vs a hole.
+   +'<div class="card '+(dep?'':'acard')+'" style="flex:1;min-width:250px;margin:0"><h2>'+(dep?'部署 · ':'🚫 部署 · ')+esc(d.date)+'</h2>'
+   +(dep?'<div><b>'+num((dep.totals||[]).reduce(function(a,x){return a+(x.distinct_lines||0)},0))+'</b> 行(去重) / <b>'
+        +num((dep.totals||[]).reduce(function(a,x){return a+(x.distinct_files||0)},0))+'</b> 檔 <span class="sub">掃描於 '+esc(dep.captured_at||'')+'</span></div>'
+      :'<div class="note" style="margin:0">'+esc(rsn.text||'無資料')
+        +(rsn.kind==='before_start'&&d.deployed_since?'<br><a href="#" data-goto="'+esc(d.deployed_since)+'">→ 跳到部署起始日 '+esc(d.deployed_since)+'</a>':'')
+        +(rsn.kind==='gap'?'<br><span class="sub">母本仍有資料，左邊那張卡就是。</span>':'')+'</div>')
+   +'</div></div>';}
+ return h+'</div>';}
+
+// ---------- collapse (same pattern as authz.html) ----------
+var CKEY='hooks_clps';
+function clpsMap(){try{return JSON.parse(localStorage.getItem(CKEY)||'{}')||{}}catch(e){return {}}}
+function applyCollapse(){var m=clpsMap(),cs=document.querySelectorAll('.card[data-cid]');
+ for(var i=0;i<cs.length;i++)cs[i].classList.toggle('clps',!!m[cs[i].dataset.cid]);}
+document.addEventListener('click',function(e){
+ var h=e.target.closest('.card[data-cid]>h2');if(!h)return;
+ var c=h.parentElement,m=clpsMap();
+ if(m[c.dataset.cid])delete m[c.dataset.cid];else m[c.dataset.cid]=1;
+ localStorage.setItem(CKEY,JSON.stringify(m));applyCollapse();});
+
+var DATA=null;
+// Seed from the URL so a date view is linkable (the "jump to start date" link
+// and a pasted URL both land on the same view).
+var DATE=(new URLSearchParams(location.search).get('date')||'');
+if(!/^\d{4}-\d{2}-\d{2}$/.test(DATE))DATE='';
+function syncUrl(){var u=new URL(location.href);
+ if(DATE)u.searchParams.set('date',DATE);else u.searchParams.delete('date');
+ history.replaceState(null,'',u);}
+function paint(){
+ if(!DATA)return;
+ document.getElementById('picker').innerHTML=renderPicker(DATA);
+ document.getElementById('today').innerHTML=renderToday(DATA);
+ document.getElementById('charts').innerHTML=renderCharts(DATA);
+ document.getElementById('matrix').innerHTML=renderMatrix(DATA);
+ document.getElementById('events').innerHTML=renderEvents(DATA);
+ document.getElementById('findings').innerHTML=renderFindings(DATA);
+ applyCollapse();
+ var src=DATA.source||{};
+ document.getElementById('head').innerHTML='更新 '+esc(DATA.generated||'')
+  +' · 母本 '+esc(src.repo||'')+'@'+esc(src.branch||'')+'（每日取 '+(src.asof_hour==null?'?':src.asof_hour)+':00 前最後一個 commit）'
+  +' · 部署快照每日一筆，'+(DATA.deployed_since?'自 '+esc(DATA.deployed_since)+' 起':'<span class="err">尚未產生</span>');}
+
+async function load(opts){
+ opts=opts||{};
+ syncUrl();
+ var btn=document.getElementById('rescan');
+ if(opts.rescan){btn.disabled=true;btn.textContent='掃描中…';}
+ var qs=[];if(TOKEN)qs.push('token='+encodeURIComponent(TOKEN));
+ if(DATE)qs.push('date='+encodeURIComponent(DATE));
+ if(opts.rescan)qs.push('rescan=1');
+ try{
+  var r=await fetch('/api/hooks'+(qs.length?'?'+qs.join('&'):''));
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  DATA=await r.json();paint();
+ }catch(e){
+  // keep the previous payload on screen; wiping it would lose the only view the
+  // user has while the error is transient
+  document.getElementById('head').innerHTML='<span class="err">載入失敗：'+esc(''+e)+'</span> '
+   +'<button class="btn" id="retry">重試</button>'+(DATA?' <span class="sub">（下方仍是上一次成功的資料）</span>':'');
+  var rt=document.getElementById('retry');if(rt)rt.onclick=function(){load()};
+ }finally{btn.disabled=false;btn.textContent='↻ 立即重新掃描';}}
+
+document.getElementById('rescan').addEventListener('click',function(){load({rescan:true})});
+document.addEventListener('change',function(e){
+ if(e.target.id==='date'){DATE=e.target.value||'';load();}});
+document.addEventListener('click',function(e){
+ var g=e.target.closest('[data-goto]');
+ if(g){e.preventDefault();DATE=g.dataset.goto;load();return;}
+ if(e.target.id==='clrdate'){DATE='';load();return;}
+ if(e.target.id==='sortbad'){SORTBAD=!SORTBAD;document.getElementById('matrix').innerHTML=renderMatrix(DATA);applyCollapse();return;}
+ var tr=e.target.closest('tr[data-repo]');
+ if(tr){var det=document.querySelector('tr.det[data-det="'+CSS.escape(tr.dataset.repo)+'"]');if(det)det.hidden=!det.hidden;}});
+load();
+</script></body></html>

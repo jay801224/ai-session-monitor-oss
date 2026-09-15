@@ -1,0 +1,15 @@
+# KB Layer-2 read-gate map (committable). Activates the pre_edit_write.sh KB DISCIPLINE READ GATE.
+# Auto-seeded by apply-to-repo.sh (ensure_kb_paths_tsv); SAFE TO EDIT — never overwritten on re-deploy.
+#
+# Format: prefix<TAB>discipline[<TAB>required_read]
+#   - prefix:        repo-relative path prefix; MUST end with "/" (council F-005/agy-gate-06: avoid greedy match).
+#   - discipline:    short tag; per-session marker is kb_read_<discipline> (rule-specific when required_read set).
+#   - required_read: OPTIONAL repo-relative governance note the AI MUST read before its first edit under
+#                    that prefix this session (fail-LOUD if the file is missing).
+# Lines starting with "#" and blank lines are ignored. THIS FILE SHIPS WITH ZERO ACTIVE ROWS — the gate
+# stays PRESENT-BUT-EMPTY (session_start says so) until you add a real row, so it never falsely reports ACTIVE.
+# Boundary (council PF item7): this file = per-repo gate map (what gets gated HERE).
+#   <your-kb-repo>/projects/_map.yml = central repo->KB-project resolution ONLY; classification is NOT centralized.
+#
+# Example (uncomment + adapt to a real migration surface in THIS repo):
+# store-ios/references/	kb-division	_shared/skill_condensed_kb_depth_rule.md

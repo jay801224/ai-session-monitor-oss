@@ -1,0 +1,922 @@
+<!doctype html><html lang="zh-TW"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Office Proto — Gather-style walking office (PROTOTYPE)</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;font:13px/1.5 -apple-system,Segoe UI,"Noto Sans TC",sans-serif;background:#0b0f16;color:#c9d1d9;overflow:hidden;display:flex;flex-direction:column;height:100dvh}
+#top{display:flex;align-items:center;gap:12px;padding:8px 14px;background:#0d1117;border-bottom:1px solid #21262d;flex:0 0 auto}
+#top b{font-size:14px}
+#top .tag{font-size:11px;color:#8b949e;background:#161b22;border:1px solid #30363d;border-radius:999px;padding:1px 9px}
+#top .proto{color:#ffb454;border-color:#5a4a24;background:#2a2113}
+/* the two demo buttons these styled were removed 2026-07-28; rules deleted with them */
+
+/* owner 2026-07-29:「還是給我滾動條，儘量確保上面的格子大小是一致的，已停的可以往下」。
+   這推翻了 plan 原本的「版面固定滿版不滾動」——格子被壓到不同尺寸正是重疊的來源。
+   垂直可捲，水平永遠不可捲（橫向捲軸才是 77e913b 那類真正的回歸）。 */
+#stage{position:relative;width:100%;flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;
+  background:radial-gradient(ellipse 80% 60% at 50% 40%,#16223322 0,transparent 70%),linear-gradient(180deg,#0b1017,#0e1522 60%,#111b29)}
+/* 地板不再被視窗高度壓扁：低於 FLOOR_MIN_H(820) 就維持 820 並讓 #stage 捲動。
+   改 relative+margin（原本是 absolute+inset）才會把捲動高度撐出來；它仍是房間／人形的
+   定位祖先。這個高度公式必須和 JS 的 floorPx() 及 preflight 的 sh 三者一致。 */
+#floor{position:relative;margin:24px;height:calc(max(100dvh - 41px, 820px) - 48px);
+  border:2px solid #2b3a4a;border-radius:16px;
+  background:repeating-linear-gradient(0deg,#ffffff05 0 1px,transparent 1px 44px),repeating-linear-gradient(90deg,#ffffff05 0 1px,transparent 1px 44px),#0f1826;
+  box-shadow:inset 0 0 80px #0008}
+
+.room{position:absolute;border-radius:12px;border:1.5px solid var(--rc,#30363d);
+  background:linear-gradient(180deg,var(--rf,#12203033),transparent 80%);overflow:hidden}
+.room::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--rc,#30363d)}
+.room .rlabel{position:absolute;top:6px;left:10px;font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--rc,#8b949e);text-transform:uppercase;opacity:.9}
+.room .rcount{position:absolute;top:5px;right:8px;font-size:10px;font-weight:700;color:#0d1117;background:var(--rc,#8b949e);border-radius:999px;min-width:16px;text-align:center;padding:0 5px}
+.room .rmore{position:absolute;bottom:4px;right:8px;font-size:10px;font-weight:700;color:var(--rc,#8b949e);background:#0d1117cc;border:1px solid var(--rc,#30363d);border-radius:999px;padding:0 5px;line-height:14px}
+/* 待命區內部兩排：上排「等你回覆」(有 wait_kind)、下排「真閒置」(無 wait_kind) */
+.room .band{position:absolute;left:9px;font-size:9px;font-weight:700;letter-spacing:.03em;color:var(--rc,#8b949e);opacity:.8}
+.room .band.wait{top:22px}
+.room .band.idle{top:54%}
+.room .bandline{position:absolute;left:6px;right:6px;top:50%;border-top:1px dashed var(--rc,#30363d);opacity:.45}
+/* 桌子層：房間之上、人形之下（.person 有自己的 z-index），座標與座位同一套 floor 百分比 */
+#desks{position:absolute;inset:0;pointer-events:none}
+.furn{position:absolute;background:#1b2635;border:1px solid #2b3a4a;border-radius:5px}
+.furn.desk{height:15px;border-radius:4px;background:linear-gradient(180deg,#243346,#1a2534)}
+.furn.mon{height:9px;border-radius:2px 2px 0 0;background:#2b5a7a;border-color:#3d7ba0;box-shadow:0 0 6px #39c5cf55}
+.furn.table{border-radius:40px;background:radial-gradient(circle,#243346,#1a2534);border-color:#2f4560}
+.furn.chair{width:11px;height:11px;border-radius:50%;background:#22303f;border-color:#2f4560}
+.furn.rack{background:repeating-linear-gradient(180deg,#1a2534 0 4px,#243346 4px 8px);border-color:#3a2a1a}
+.furn.couch{height:16px;border-radius:9px;background:linear-gradient(180deg,#2a3446,#20293a);border-color:#33465c}
+.furn.locker{width:20px;height:26px;border-radius:3px;background:linear-gradient(180deg,#26303c,#1a222c);border-color:#333d49}
+.furn.locker::after{content:"";position:absolute;top:11px;left:3px;width:4px;height:4px;border-radius:50%;background:#3a4552}
+.plant{position:absolute;font-size:15px;filter:saturate(.85) brightness(.95);opacity:.9;pointer-events:none}
+
+/* ---- avatar = drawn per-session figure (identity token), free-moving ---- */
+.person{position:absolute;width:60px;height:60px;margin:-56px 0 0 -30px;
+  transform:scale(var(--ps,1));transform-origin:50% 93.333%;
+  transition:left 1.35s cubic-bezier(.34,.02,.24,1),top 1.35s cubic-bezier(.34,.02,.24,1);z-index:5;will-change:left,top}
+.person.mini{width:40px;height:40px;margin:-38px 0 0 -20px;transform-origin:50% 95%;z-index:4}
+/* owner 2026-07-28「大代理/小代理 整體字體調大成 16」＋「字體跟圖不要重疊」。
+   名牌改成錨在人形盒的正上方（bottom:100%），不再用寫死的 top:-15px —— 字級一變，
+   固定 offset 就會吃進圖裡；bottom:100% 不管字多大都貼在圖的上緣外面。 */
+.person .nameplate{position:absolute;bottom:100%;margin-bottom:5px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  font-size:12px;font-weight:600;background:#161b22ee;border:1px solid #30363d;border-radius:999px;padding:1px 7px;
+  display:flex;align-items:center;gap:5px;line-height:17px;z-index:6;
+  /* 整張牌的寬度上限＝place() 依這個人的座位寬算出來的 --npw。夾在 .pname 上是不夠的：
+     圓點／OS／家別徽章／padding 是固定寬度，名字縮到 0 這張牌仍比座位寬（實測 6 人時
+     還是凸出房間 16px）。夾容器，讓 .pname 在裡面被擠掉。 */
+  max-width:var(--npw,none)}
+/* 子代理坐在父代理正下方（subXY），名牌再掛在自己頭上就正好壓到父代理的圖（實測疊 16px）。
+   小人的名牌改掛在腳下，兩個圖之間就不再有字。 */
+.person.mini .nameplate{font-size:12px;top:100%;bottom:auto;margin-top:3px;margin-bottom:0}
+/* 兄弟子代理左右錯開：座距約 56px，兩邊各讓 30px＝拉開 116px，所以兄弟的名牌要收更窄
+   （下面 .sib 的 pname 上限 64px，整張約 112px < 116px）。讓太多會頂出畫面左緣——
+   實測讓 52px 時，最左邊那個父代理的子代理名牌就掉出視窗 29px。
+   只在 .sib（真的有兄弟）時生效，單獨的子代理仍置中對齊自己的圖、用一般字寬。 */
+.person.mini.sib .nameplate{transform:translateX(-50%) translateX(-30px)}
+.person.mini.sib.alt .nameplate{transform:translateX(-50%) translateX(30px)}
+.person.mini.sib .nameplate .pname{max-width:64px}
+/* hover 展開的那一疊才是 16px（owner 指定）。靜止的名牌維持小字：19 個人同畫面時，
+   靜止名牌一上 16px，名牌互疊從 2 組暴增到 29 組、最寬一處疊 308px、還有 2 張被視窗切掉
+   （1920 實測），跟「不要重疊」直接衝突。 */
+.person:hover .nameplate{font-size:16px;line-height:22px}
+/* 頭上只留身分：狀態燈 + 名稱 + 家別字母。其餘徽章（機器／權限／模型／ctx／stale／專案／
+   任務數／hook／子代理／相對時間）改成 hover 才展開 —— owner 2026-07-28「頭上多了不必要
+   資訊請隱藏，那些多的可以 hover on 再顯示」。
+   量到的問題：名牌 white-space:nowrap 又沒有寬度上限，最寬一張 536px 掛在 430px 的房間裡，
+   往右吃掉隔壁區 161px、還被視窗切掉 116px（1920 寬實測）。
+   注意：徽章仍然照常 render 進 DOM，這裡只藏視覺 —— preflight 的 personEl fixture 斷言的是
+   innerHTML 字串（tools/preflight_ui.py:2707 plate()），改成不 render 會讓那批 check 全紅。
+   任務進度（.tprog）是例外，owner 2026-07-28 指名要留在標題上：「3/10（第三項，組共十項）」。 */
+.person .nameplate>span:not(.sdot):not(.em):not(.pname):not(.tprog){display:none}
+/* hover 展開：owner「一行一個，不要全部擠一行」——改直向堆疊，一個徽章一列。 */
+.person:hover .nameplate{flex-direction:column;align-items:flex-start;gap:3px;border-radius:10px;padding:5px 9px}
+.person:hover .nameplate>span:not(.sdot):not(.em):not(.pname):not(.tprog){display:flex}
+/* 名字本身也會擠：`some-long-project--worktrees-some-branch` 這種長專案名，藏完徽章
+   還有 261px，會頂出房間、在離線列跟鄰居的名牌疊在一起（實測 3 組重疊）。收成省略號，
+   hover 展開看全名。 */
+/* 名字在被夾住的牌裡是可壓縮的那一段：min-width:0 是必要的，flex item 預設 min-width:auto
+   會撐著不肯縮，容器的 max-width 就形同虛設。92px 是牌沒被夾時（--npw 未設）的原始上限。 */
+.person .nameplate .pname{max-width:92px;min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis}
+/* 座位窄到連「圓點＋幾個字」都放不下時，硬塞只會得到一張讀不出來又壓到隔壁的牌。
+   整張收起，靠 hover 看（hover 同時解除寬度上限，見下面那條）。 */
+.person.npnarrow .nameplate{display:none}
+.person.npnarrow:hover .nameplate{display:flex}
+.person.mini .nameplate .pname{max-width:92px}
+/* （這裡原本有一條 .person.small 專用的 64px 上限，是 PR 區名牌凸出房間 7px 的特例補丁。
+    改成上面那條依座位寬現算的 --npw 之後就多餘了 —— 同一個算式在 PR 區得出的正是 64px，
+    而且它同時修好待命區 6 人時凸出 29px 的同一個毛病。特例刪掉，規則留一條。） */
+/* hover 是「看清楚這是誰」的動作，所以連整張牌的座位寬上限一起解除 —— 只解 .pname
+   會讓名字撐開卻被容器切掉，等於 hover 了還是看不到。 */
+.person:hover .nameplate{max-width:none}
+.person:hover .nameplate .pname{max-width:none}
+/* 上方塞不下時往下開（class 由 hover 時實測決定，見檔案末端的 mouseover 委派）。
+   大人小人共用，所以 .mini 的 top:100% 也走同一條規則；.mini.sib 的左右錯開是 transform，
+   跟這裡的 top/bottom 不衝突。 */
+/* class 名字不可以叫 flip：.flip 早就被 place() 拿去表示「這一步往左走」，控制的是
+   精靈的鏡像（:144-145 的 --fx / scaleX(-1)）。共用同一個 class 會讓 hover 把往左走的
+   角色翻回右邊，也會讓需要向下開名牌的角色被鏡像。名牌方向自己一個 class。 */
+.person.npdown .nameplate{bottom:auto;top:100%;margin-top:5px;margin-bottom:0}
+.person.mini.npdown .nameplate{margin-top:4px}
+/* 展開後要蓋在鄰居上面，否則被隔壁的名牌／傢俱切掉 */
+.person:hover{z-index:20}
+.person:hover .nameplate{z-index:21}
+.nameplate .sdot{width:6px;height:6px;border-radius:50%}
+.nameplate .em{font-size:9px}
+.nameplate .osi{font-size:9px;opacity:.85}
+/* 來源機器徽章：顏色由後端 registry 帶進 style，這裡只管尺寸（比照 ui/dashboard.html machineBadge） */
+.nameplate .machb{font-size:9px;font-weight:700;border-radius:999px;padding:0 5px}
+.nameplate .tprog{font-size:9px;font-weight:700;color:#79c0ff}
+.nameplate .ctxb{font-size:9px;font-weight:700;border-radius:999px;padding:0 5px}
+/* >85% pulses, exactly like ui/dashboard.html's ctxBadge does */
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 #f8514900}50%{box-shadow:0 0 0 4px #f8514922}}
+.nameplate .ctxb.hot{animation:pulse 2s ease-in-out infinite}
+/* 連線中斷（stale）不是「已停」：琥珀色警示，用色比照 ui/dashboard.html 的 stale 那段 */
+.nameplate .staleb{font-size:9px;font-weight:700;color:#d29922;border:1px solid #d2992255;border-radius:999px;padding:0 5px}
+/* 權限模式／hook 健康度：字形與顏色由 ui/dashboard.html 的 pmBadge／hookBadge 帶進 style，這裡只管尺寸 */
+.nameplate .pmb,.nameplate .hookb{font-size:9px;font-weight:700}
+/* 沒畫出來的子代理：配色沿用 ui/dashboard.html 那顆 🔬 子代理徽章的紫 */
+.nameplate .subb{font-size:9px;font-weight:700;color:#d2b8ff;background:#a371f733;border-radius:999px;padding:0 5px}
+/* 專案／模型／開放任務數／最後活動：ui/dashboard.html 的 rowsTbl 一直在畫這四個，顏色沿用它
+   那一列（📁 專案膠囊、模型膠囊、.tbadge 的 ▤N、最右欄 .sub 的相對時間），這裡只管尺寸 */
+.nameplate .projb{font-size:9px;font-weight:700;color:#58a6ff;background:#1f6feb22;border-radius:999px;padding:0 5px}
+.nameplate .modelb{font-size:9px;font-weight:700;color:#d2b8ff;background:#a371f733;border-radius:999px;padding:0 5px}
+.nameplate .tasksb{font-size:9px;font-weight:700;color:#8b949e;background:#21262d;border-radius:999px;padding:0 5px}
+.nameplate .ageb{font-size:9px;color:#6e7681}
+.person .taskbar{position:absolute;bottom:-13px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  font-size:8px;color:#c9d1d9;background:#0d1117cc;border:1px solid #30363d;border-radius:999px;padding:0 4px;line-height:12px;z-index:6}
+.person .taskbar.council{color:#39c5cf;border-color:#39c5cf66}
+.person .taskbar.wait{color:#a371f7;border-color:#a371f766}
+.person .taskbar.prs{color:#ff7b72;border-color:#ff7b7266}
+.person.mini .taskbar{display:none}
+.avatar{position:relative;width:100%;height:100%}
+.cre-img{position:relative;z-index:1;width:100%;height:100%;object-fit:contain;display:block;
+  filter:drop-shadow(0 2px 2px #0009);transform-origin:50% 100%}
+.shadow{position:absolute;left:50%;bottom:0;width:34px;height:9px;margin-left:-17px;border-radius:50%;background:#0009;filter:blur(2px);z-index:0}
+.person.mini .shadow{width:24px;margin-left:-12px}
+/* 同批啟動（後端 group_key）的地板光暈：比照 ui/dashboard.html 的 .floorglow
+   （fill:var(--batch);opacity:.24）——同一次 launch 的人腳下是同一個顏色 */
+.bglow{position:absolute;left:50%;bottom:-1px;width:42px;height:12px;margin-left:-21px;border-radius:50%;background:var(--batch,#30363d);opacity:.24;filter:blur(3px);z-index:0}
+.person.mini .bglow{width:28px;height:8px;margin-left:-14px}
+.vring{position:absolute;left:50%;bottom:-2px;width:40px;height:12px;margin-left:-20px;border-radius:50%;
+  border:2px solid var(--vend,#30363d);opacity:.75;box-shadow:0 0 9px var(--vend,#30363d);z-index:0}
+.person.mini .vring{width:26px;margin-left:-13px;height:8px}
+.emblem{position:absolute;top:-2px;right:-3px;width:17px;height:17px;border-radius:50%;
+  background:var(--vend,#30363d);border:2px solid #0d1117;display:flex;align-items:center;justify-content:center;
+  font-size:9px;color:#0d1117;font-weight:800;z-index:6}
+.person.mini .emblem{width:13px;height:13px;font-size:7px}
+.person.st-stopped .cre-img{filter:grayscale(1) brightness(.6) drop-shadow(0 2px 2px #0009);opacity:.7}
+/* walk = hop while gliding (static sprite has no legs to animate); idle = gentle bob */
+@keyframes hop{0%,100%{transform:translateY(0) scaleX(var(--fx,1))}25%{transform:translateY(-5px) scaleX(var(--fx,1))}50%{transform:translateY(0) scaleX(var(--fx,1))}75%{transform:translateY(-3px) scaleX(var(--fx,1))}}
+@keyframes breathe{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-1px) scale(1.015)}}
+.person.walking .cre-img{animation:hop .42s ease-in-out infinite}
+.person.st-working:not(.walking) .cre-img{animation:breathe 3.4s ease-in-out infinite}
+.person.flip{--fx:-1}
+.person.flip .cre-img{transform:scaleX(-1)}
+@media(prefers-reduced-motion:reduce){.person{transition:none}.cre-img{animation:none!important}}
+</style></head>
+<body>
+<div id="top">
+  <b>🏢 Office</b>
+  <span class="tag proto">連線中… 尚未取得真實資料</span>
+  <span class="tag" id="clock">—</span>
+</div>
+<div id="stage"><div id="floor"></div></div>
+<script>
+// per-session identity = drawn figure. Each img is a data-URI SVG built right
+// here — no image files ship with this repo. One silhouette (rounded body +
+// head), 26 hues at even 360/26 spacing; only the hue tells figures apart.
+// Prefer your own artwork? Drop PNGs into assets/avatars/ and point img at
+// them — everything else (grayscale when stopped, flip, hop/breathe, hash
+// assignment, subagent inheritance) only ever targets `.cre-img`.
+const _creSVG = h => 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` +
+  `<ellipse cx="32" cy="45" rx="16" ry="15" fill="hsl(${h} 72% 55%)" stroke="hsl(${h} 72% 34%)" stroke-width="2.5"/>` +
+  `<circle cx="32" cy="21" r="12" fill="hsl(${h} 72% 62%)" stroke="hsl(${h} 72% 34%)" stroke-width="2.5"/>` +
+  `<circle cx="27.5" cy="20" r="2.1" fill="#10131a"/><circle cx="36.5" cy="20" r="2.1" fill="#10131a"/>` +
+  `</svg>`);
+const CREATURES = [
+  {key:'hue-000', img:_creSVG(0)},
+  {key:'hue-014', img:_creSVG(14)},
+  {key:'hue-028', img:_creSVG(28)},
+  {key:'hue-042', img:_creSVG(42)},
+  {key:'hue-055', img:_creSVG(55)},
+  {key:'hue-069', img:_creSVG(69)},
+  {key:'hue-083', img:_creSVG(83)},
+  {key:'hue-097', img:_creSVG(97)},
+  {key:'hue-111', img:_creSVG(111)},
+  {key:'hue-125', img:_creSVG(125)},
+  {key:'hue-138', img:_creSVG(138)},
+  {key:'hue-152', img:_creSVG(152)},
+  {key:'hue-166', img:_creSVG(166)},
+  {key:'hue-180', img:_creSVG(180)},
+  {key:'hue-194', img:_creSVG(194)},
+  {key:'hue-208', img:_creSVG(208)},
+  {key:'hue-222', img:_creSVG(222)},
+  {key:'hue-235', img:_creSVG(235)},
+  {key:'hue-249', img:_creSVG(249)},
+  {key:'hue-263', img:_creSVG(263)},
+  {key:'hue-277', img:_creSVG(277)},
+  {key:'hue-291', img:_creSVG(291)},
+  {key:'hue-305', img:_creSVG(305)},
+  {key:'hue-318', img:_creSVG(318)},
+  {key:'hue-332', img:_creSVG(332)},
+  {key:'hue-346', img:_creSVG(346)},
+];
+// no-shell: every zone below has a REAL data source (see report/office2-zone-signal-study).
+// coding/docs/testing <- work_kind=working + work_detail; cli <- /api/cli-bridge now_running;
+// standby <- work_kind=standby; offline <- status stopped/stale; council <- work_council
+// .in_council (monitor _council_state: dispatch marker on the live tail). Zones without a
+// real signal (多模型對抗) are intentionally NOT drawn until their signal lands.
+// Layout budget: fixed full-bleed, no scrolling -- 3 rows, 3+4+1 = 8 cells.
+// 統一格線（owner 2026-07-29 選定 4欄×2列、第 8 格留空）。
+// 先前是三種尺寸（31x44 x3、23x30 x4、98x18 x1）；被壓小的那幾格塞不下名牌，正是
+// owner 看到「一直重複疊到」的來源。現在 7 個活動區「完全等大」——
+// 欄寬 23.375 = (100 - 左右各 1 - 3 個 1.5 間距) / 4，列高一律 34。
+// 已停/離線維持整排、放在格線下方，可以往下長（那一區人最多且最不需要精讀）。
+// 地板的像素尺寸 —— 座位、桌子、子代理三處都吃這一組，先前是三份一模一樣的行內算式。
+// TOPBAR/PAD 對應 CSS；FLOOR_MIN_H 是「視窗再矮也不把格子壓扁」的下限，低於它就讓
+// #stage 出現垂直捲軸（owner 2026-07-29 指定）。這三個常數必須與 #floor 的 height
+// 公式、以及 preflight seat oracle 的 sh 完全一致，否則量到的人形不是畫出來的人形。
+// 座標一律寫成字面值：preflight 用正規式把這個常數整塊抽出去丟 node 跑，
+// 用變數（GX[0] 之類）會讓它解析不到，也會讓抽出來的區塊少了相依而整批紅。
+// 欄 x = 1 / 25.875 / 50.75 / 75.625，寬 23.375 =（100 − 左右各 1 − 3 個 1.5 間距）/ 4；
+// 列 y = 2 / 38，高一律 34。第 4 欄第 2 列（75.625, 38）刻意留空。
+const ZONES = [
+  {key:'coding',  label:'寫程式',  rc:'#58a6ff', rf:'#123', x:1,      y:2,  w:23.375, h:34},
+  {key:'docs',    label:'寫文件',  rc:'#3fb950', rf:'#132', x:25.875, y:2,  w:23.375, h:34},
+  {key:'testing', label:'測試',    rc:'#db61a2', rf:'#212', x:50.75,  y:2,  w:23.375, h:34},
+  {key:'review',  label:'專家審視',rc:'#a371f7', rf:'#212', x:75.625, y:2,  w:23.375, h:34},
+  {key:'council', label:'3AI共議', rc:'#39c5cf', rf:'#122', x:1,      y:38, w:23.375, h:34},
+  {key:'cli',     label:'CLI 排隊',rc:'#f0883e', rf:'#221', x:25.875, y:38, w:23.375, h:34},
+  {key:'standby', label:'待命',    rc:'#d29922', rf:'#221', x:50.75,  y:38, w:23.375, h:34},
+  {key:'pr',      label:'PR',      rc:'#ff7b72', rf:'#211', x:75.625, y:38, w:23.375, h:34},
+  {key:'offline', label:'已停 / 離線', rc:'#6e7681', rf:'#111', x:1, y:75, w:98, h:23},
+];
+// work_council.phase -> the sub-phase label shown on the MAIN agent sitting in 3AI共議.
+// 'integrate' keeps its literal "(推估)": only 17% of real dispatches show a positive
+// integrate signal (report/office2-A-signal-audit_2026-07-27.md), so it is inferred.
+const COUNCIL_PHASE = {wait:'等待別家', integrate:'整合中(推估)', await_user:'等你決定'};
+// 待命區拆兩組（不再是雜物間）：有 wait_kind = 「等你回覆」，掛後端 monitor._wait_phrase
+// 的既有字串（不另造詞）；無 wait_kind = 「真閒置」。純顯示 —— 進入 waiting 的推播後端
+// 已經發過，這裡絕不再發第二次通知。
+const WAIT_PHRASE = {question:'❓ 在問你問題', plan_review:'📋 等你審核 Plan'};
+// PR 區的狀態文案。後端 collect_github_prs 已經把 GitHub 的兩個獨立訊號（mergeable 與
+// statusCheckRollup）收成這五個桶，前端只負責翻成中文，不在這裡二次判斷。
+// 'unknown' 保留「計算中」而不是猜一個結果：GitHub 的 mergeable 是惰性計算，冷 PR 第一次
+// 查一定回 UNKNOWN，下一輪才收斂（實測某個冷 PR 由 UNKNOWN → 衝突）。
+const PR_STATE = {ready:'✅ 可合併', ci:'⏳ 等 CI', ci_fail:'❌ CI 失敗',
+                  conflict:'⚠ 衝突', unknown:'⏱ 計算中'};
+// config 的 github_pr.scope 三選一，後端原樣回傳。認不得的值不翻譯（後端本來就會擋下來
+// 並回 available:false，這裡不需要再猜一個）。
+const PR_SCOPE = {all:'全部 repo', public:'只看公開 repo', private:'只看私人 repo'};
+// 「照主代理的圖案、只是比較小」（owner 2026-08-05）。0.7 落在 owner 先前對小人形定的
+// 50–70% 帶的上緣：再小就看不出是哪一隻，而辨識造型正是這個視圖要做到的事。
+const SMALL_SCALE = 0.7;
+// 待命區的 wait label：非待命區回 null（共議區已有自己的子階段 label，不重複掛）
+function standbyWait(r){return zoneOf(r)==='standby'&&r.wait_kind
+  ? (WAIT_PHRASE[r.wait_kind]||'💬 停下等你') : null;}
+// 座位分組：待命區有 wait label 的坐上排，其餘坐下排；其他區不分組
+function standbyGroup(a){return a.zone!=='standby'?null:(a.wait?'wait':'idle');}
+// 「為什麼被分到這一區」的誠實訊號：後端 work_reason（monitor.py）。三段文案沿用
+// ui/dashboard.html signalDeskRouteLabel 的既有字串，不另造詞（比照 WAIT_PHRASE）。
+// dashboard 那支在認不得 work_reason 時會退回「以區域命名」的文案，office2 不照抄：
+// 這裡是 8 區、dashboard 是 4 區，搬過來等於自創詞——認不得就不說，絕不編造理由。
+const ROUTE_EVIDENCE = {active_tail:'已確認本機工具工作中', status_stopped:'session 已停止', remote_no_live_tail:'遠端無本機 activity 訊號'};
+function routeEvidence(r){const k=r&&r.work_reason;
+  return (typeof k==='string'&&Object.prototype.hasOwnProperty.call(ROUTE_EVIDENCE,k))?ROUTE_EVIDENCE[k]:'';}
+const VEND = {
+  cc:{em:'C',color:'#f0883e',name:'Claude'}, codex:{em:'X',color:'#58a6ff',name:'Codex'},
+  antigravity:{em:'A',color:'#3fb950',name:'Antigravity'}, copilot:{em:'G',color:'#39c5cf',name:'Copilot'},
+  hermes:{em:'H',color:'#a371f7',name:'Hermes'}, gemini:{em:'M',color:'#db61a2',name:'Gemini'},
+};
+// vendor 別名 -> VEND key：cli_bridge 的 dispatch agent 名（CLI-queue helper tokens）
+// 與 mini_rows 每列自帶的 vendor（subVend）共用同一張表，不另造第二份別名對照
+const CLIVEND={codex:'codex',antigravity:'antigravity',hermes:'hermes',gemini:'gemini',copilot:'copilot',claude:'cc',cc:'cc'};
+// `stale` 的灰是 dashboard `.stale` 圓點的同一個灰（琥珀警示掛在 staleBadge 上，不在圓點）
+const STDOT = {working:'#3fb950',standby:'#d29922',stopped:'#6e7681',waiting:'#a371f7',stale:'#484f58'};
+// OS signal (dashboard convention: machine wins over os; see dashboard OSI + machineBadge).
+// This map reads the OS axis only -- exactly the values monitor.os_of_cwd() emits
+// ('win'/'mac'/'linux'), with the same glyphs dashboard.html's OSI already uses. `machine`
+// is a machine-registry key (win/mac/company/home) and only hits this map when it names an
+// OS. Laptop-vs-desktop is a SEPARATE axis (the registry's per-machine "form" field) and is
+// deliberately NOT read here.
+// A row with no recognisable value renders NO icon at all -- never an empty box or "undefined".
+const OSICON = {win:'🪟',mac:'🍎',linux:'🐧'};
+function osIcon(a){return OSICON[String((a&&a.machine)||'').toLowerCase()]
+                       ||OSICON[String((a&&a.os)||'').toLowerCase()]||'';}
+// 機器登錄簿：`machine` 的值（win/mac/company/home…）多半不是 OS 名字，OSICON 永遠蓋不到，
+// 所以 relay 進來的 company/home 兩台機器在 office2 上是「完全不顯示」。icon／label／每台機器的
+// 顏色唯一來源是後端 registry（monitor.DEFAULT_MACHINES ＋ config.json "machines" 覆寫），
+// 隨 /api/status 的 machines 欄一起送到前端；這裡絕不留第二份副本——使用者改過 config 之後
+// 寫死的那份就會說謊（比照 CTXSTEP／STALE_PHRASE 的 anti-drift 理由）。
+// key 的取法沿用 dashboard machKey()：machine（只有 relay 列有）→ local_machine（本機自報是
+// 哪一台，隨 /api/status 一起來）→ os。本機列絕不補 machine 欄——那個欄位是「這列是遠端列」的
+// 判定式，補了會讓 dashboard 的 drill-down 連結與告警 deep link 靜默消失。
+// 簿子上查無此 key（或還沒 poll 到）就不畫徽章，退回 OSICON 的 OS 字形，絕不畫空框。
+// LOCALM 只認領「這台自己的」列:claude_projects 可能含掛載的他機 root(~/.claude-mac/
+// projects),那些列 os='mac' 但同樣沒有 machine 欄,不能被 Windows 這台認領。比照
+// monitor.py _machine_key / dashboard machKey。
+let MACHINES={};
+let LOCALM='';
+let LOCALOS='';
+function machBadge(a){const k=!a?'':(a.machine||((a.os&&LOCALOS&&a.os!==LOCALOS)?a.os:(LOCALM||a.os)));
+  const m=k&&MACHINES[k];if(!m)return '';
+  return `<span class="machb" title="來源機器" style="background:${esc(m.bg||'#30363d')};`+
+         `color:${esc(m.fg||'#c9d1d9')}">${esc(m.icon||'')} ${esc(m.label||'')}</span>`;}
+// Context-window signal. The two steps (>60, >85) and their colours are ui/dashboard.html's
+// ctxBadge vocabulary, not a new one: office2 cannot read the dashboard at render time, so the
+// scale is mirrored here and check-office2-ctx parses ctxBadge out of ui/dashboard.html and
+// FAILs the moment this copy drifts (same anti-drift pattern as the OSICON domain check).
+// No reading (ctx == null) draws NO badge -- never a fake 0%.
+const CTXSTEP = [{over:85, bg:'#f8514922', fg:'#ff7b72', hot:true},
+                 {over:60, bg:'#d2992222', fg:'#e3b341', hot:false},
+                 {over:-1, bg:'#6e768122', fg:'#8b949e', hot:false}];
+function ctxBadge(p){if(p==null)return '';
+  const s=CTXSTEP.filter(x=>p>x.over)[0];
+  return `<span class="ctxb${s.hot?' hot':''}" title="context window used" `+
+         `style="background:${s.bg};color:${s.fg}">${p}%</span>`;}
+// The COST axis, and deliberately a second badge rather than a recolouring of
+// the one above: ctx is occupancy of the window ("will this overflow"), this is
+// how much gets re-read every turn. With a 1M window the two stopped agreeing --
+// 306k is a calm 31% and still re-read in full each turn. Same mirroring deal as
+// CTXSTEP: the scale is copied from ui/dashboard.html's tokBadge and
+// check-costaxis fails if the two drift. Thresholds are measured, not picked:
+// per-turn median 306k, p75 436k, p90 602k, and 400k-700k alone carries 41.4%
+// of all cache-read volume.
+const TOKSTEP = [{over:700000, bg:'#f8514922', fg:'#ff7b72'},
+                 {over:400000, bg:'#d2992222', fg:'#e3b341'},
+                 {over:-1,     bg:'#6e768122', fg:'#8b949e'}];
+function tokBadge(n){if(n==null)return '';
+  const s=TOKSTEP.filter(x=>n>x.over)[0];
+  const t=n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(0)+'k':String(n);
+  return `<span class="ctxb" title="context re-read per turn (cost axis)" `+
+         `style="background:${s.bg};color:${s.fg}">${t}</span>`;}
+// 連線中斷 ≠ 已停：後端把失聯機器的列強制成 status='stale'（monitor.collect_office），
+// 意思是「這個狀態是舊的，可能不準」，跟使用者自己停掉的 session 是兩件事。office2 先前在
+// stOf 把 stale 壓成 stopped，看板上兩者長得一模一樣。文案與分鐘換算沿用 ui/dashboard.html
+// 既有那段（⚠ 連線中斷 + Math.round(stale_age/60)+'m 前'），不另造詞。
+const STALE_PHRASE='⚠ 連線中斷', STALE_SEP=' · ', STALE_MIN=60, STALE_SUFFIX='m 前';
+// 只畫在 session 自己的名牌上：子代理沒有自己的連線狀態，重複掛只是噪音。
+// 後端沒給 age（relay 整欄可能缺）時只警示、不編造分鐘數。
+function staleBadge(a){if(a.st!=='stale')return '';
+  const n=a.stale_age, age=(typeof n==='number'&&n)?STALE_SEP+Math.round(n/STALE_MIN)+STALE_SUFFIX:'';
+  return `<span class="staleb" title="遠端機器失聯，狀態可能不準（非即時）">${STALE_PHRASE}${age}</span>`;}
+// 權限模式：ui/dashboard.html 已經有兩份既有定義——pmBadge（字形＋顏色）與 Signal Desk 的
+// MODEMAP（多認一個 dontAsk，字形與 acceptEdits 完全相同）。這裡鏡射兩者的聯集，不自創字形也
+// 不自創 key；check-office2-hooks-pmode 會把兩份都從 dashboard 解析出來比對，這份副本一漂移就紅
+// （同 CTXSTEP／STALE_PHRASE 的 anti-drift 理由）。'default'、沒給、不認得的值一律不畫；
+// __proto__:null 讓 relay 進來的 'constructor' 這類字串查不到東西，不會生出一個假徽章。
+const PMODE = {__proto__:null,
+  bypassPermissions:{text:'🔓bypass', color:'#f85149'},
+  plan:{text:'📋plan', color:'#58a6ff'},
+  acceptEdits:{text:'✎auto', color:'#d29922'},
+  dontAsk:{text:'✎auto', color:'#d29922'}};
+// hook 健康度：✓成功／⊘取消（含 blocked、timeout）／✗錯誤，字形、顏色、title 與「成功數＝
+// hits 扣掉 cancelled 與 errors」的算法都沿用 ui/dashboard.html 的 hookBadge。hits=0 或後端整欄
+// 沒給（relay 列就是 {}）不畫；只認數字，非數字一律當 0，絕不編造次數，也不畫 ✓0。
+const HOOKSTEP = [{key:'ok', glyph:'✓', color:'#3fb950', title:'hook success'},
+                  {key:'cancelled', glyph:'⊘', color:'#d29922', title:'cancelled / blocked / timeout'},
+                  {key:'errors', glyph:'✗', color:'#f85149', title:'error e.g. script not found'}];
+// 兩者都只掛在 session 自己的名牌上：子代理沒有自己的權限模式與 hook 帳。
+function pmBadge(a){const m=PMODE[a&&a.pmode];if(!m)return '';
+  return `<span class="pmb" style="color:${m.color}" title="permission mode">${m.text}</span>`;}
+function hookBadge(a){const h=a&&a.hooks;if(!h)return '';
+  const num=v=>typeof v==='number'&&v>0?v:0, hits=num(h.hits);
+  if(!hits)return '';
+  const c=num(h.cancelled), e=num(h.errors), n={ok:hits-c-e, cancelled:c, errors:e};
+  return HOOKSTEP.filter(s=>n[s.key]>0).map(s=>
+    `<span class="hookb" style="color:${s.color}" title="${s.title}">${s.glyph}${n[s.key]}</span>`).join('');}
+// 畫不出來的子代理：後端的 mini_rows 被 _OFFICE_MINI_CAP 截頂（monitor._mini_rows），office2
+// 一個 mini 畫一個小人，超出的那些先前無聲消失。r.subagents 是沒被截的真數，dashboard 兩處都
+// 已經在講這件事——Signal Desk 的 🔬N（只在真數 > 畫得出身分的個數時才出現）與「另有 N 位子代理，
+// 身分不可得」——字形、配色與文案全部沿用，不另造詞（同 STALE_PHRASE 的 anti-drift 理由）。
+const SUB_GLYPH='🔬', SUB_HIDDEN_PRE='另有 ', SUB_HIDDEN_POST=' 位子代理，身分不可得。';
+// 只掛在 session 自己的名牌上：子代理沒有自己的子代理。真數 <= 畫得出來的個數就完全不畫——
+// 沒有東西被藏起來時多一顆徽章只是噪音，而且那等於重複已經站在腳邊的小人。
+function subsBadge(a){const known=(a.subs||[]).length,
+  tot=(typeof a.subs_total==='number'&&a.subs_total>known)?a.subs_total:0;
+  if(!tot)return '';
+  return `<span class="subb" title="${SUB_HIDDEN_PRE}${tot-known}${SUB_HIDDEN_POST}">${SUB_GLYPH}${tot}</span>`;}
+// ui/dashboard.html 的 rowsTbl 一直在畫、office2 先前一個都沒接的四個列徽章：專案（📁）、
+// 模型、開放任務數（▤N）、最後活動（相對時間）。字形、顏色與「什麼時候不畫」的條件全部沿用
+// 那一列，不另造詞（同 STALE_PHRASE／CTXSTEP 的 anti-drift 理由）。四個都只掛在 session 自己
+// 的名牌上：子代理沒有自己的專案、模型、待辦清單或最後活動時間。
+const PROJ_GLYPH='📁', TASKS_GLYPH='▤';
+// 專案名與 session label 相同時 dashboard 不畫（r.project&&r.project!==r.label）——同一個
+// 字串不畫兩次；後端沒給這欄（本機 Claude 列就沒有）也不畫。
+function projBadge(a){const p=a&&a.project;if(typeof p!=='string'||!p||p===a.label)return '';
+  return `<span class="projb" title="project">${PROJ_GLYPH} ${esc(p)}</span>`;}
+// 模型名（monitor 從 context 讀出來的那個）：沒讀到就不畫，絕不畫空膠囊。
+function modelBadge(a){const m=a&&a.model;if(typeof m!=='string'||!m)return '';
+  return `<span class="modelb" title="model">${esc(m)}</span>`;}
+// 開放任務數 ▤N = 後端的 `tasks`（還沒勾掉的件數），跟人形上那個 task_total 進度（tprog／
+// taskbar）是兩個不同的後端欄位，不可互相代用。0、沒給、非數字一律不畫。
+function tasksBadge(a){const n=a&&a.tasks;if(typeof n!=='number'||!(n>0))return '';
+  return `<span class="tasksb" title="open tasks">${TASKS_GLYPH}${Math.floor(n)}</span>`;}
+// 多久沒動靜：ago(ts) 是 ui/dashboard.html 那格相對時間（s/m/h/d 四段）原樣鏡一份；滑鼠停在
+// 徽章上看到的是後端的原始 ISO 時間（dashboard 同一格就是 title=esc(r.last)）。沒有 ts 就
+// 整段空白——不畫 0s，也不畫空框。
+function ago(ts){if(!ts)return '';let s=Math.max(0,Date.now()/1000-ts);if(s<60)return Math.floor(s)+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d';}
+function ageBadge(a){return `<span class="ageb" title="${esc((a&&a.last)||'')}">${esc(ago(a&&a.ts))}</span>`;}
+// 這一回合已經跑了多久：dashboard 的辦公桌卡片畫 ⏱ fmtMin(r.elapsed)，分鐘換算也原樣鏡一份
+// （fmtMin 連 '—' 那條退路一起照抄，才抓得到漂移）。後端只在 running/waiting 時給 elapsed，
+// 沒有就整段不出現——表格需要佔位符，掛在人身上的 tooltip 不需要。
+const ELAPSED_GLYPH='⏱';
+function fmtMin(sec){if(sec==null)return '—';var m=Math.round(sec/60);return m<1?'<1m':(m<60?m+'m':Math.floor(m/60)+'h'+(m%60)+'m');}
+function elapsedText(a){const s=a&&a.elapsed;
+  return (typeof s==='number'&&s>=0)?ELAPSED_GLYPH+' '+fmtMin(s):'';}
+// No MOCK roster any more (owner 2026-07-28). It used to seed the floor with nine fake agents that
+// covered every zone, and a failed fetch silently kept them — so a populated office was not evidence
+// of anything. The floor now starts EMPTY and only ever draws rows that came from /api/status.
+let AGENTS = [];
+
+const floor=document.getElementById('floor');
+// 桌子層：疊在房間之上、人形之下（.person 有 z-index，永遠蓋在桌面上）。內容每一輪重畫，
+// 因為桌位是從當下的座位座標算出來的。
+const deskLayer=document.createElement('div');deskLayer.id='desks';
+const seatUse={}, seatOver={};
+// 房間裡「不隨人數變」的固定家具。辦公桌不在這裡：桌子一律由 deskHTML() 從每個人的
+// 實際座位座標（seatXY）推導出來——舊版在這支畫死 top:62%/72% 的兩張桌，跟 seatXY 的
+// SEAT_BAND 毫無關係，人因此永遠站在桌子上方的半空中。
+function furnHTML(key){
+  switch(key){
+    case 'coding': case 'docs': return '<div class="plant" style="right:6%;bottom:7%">🪴</div>';
+    case 'testing': return '<div class="plant" style="right:6%;bottom:7%">🧪</div>';
+    case 'review': return '<div class="plant" style="right:6%;bottom:7%">🔍</div>';
+    case 'council': return '<div class="plant" style="right:6%;bottom:7%">🤝</div>';
+    case 'cli': return '<div class="furn rack" style="left:80%;top:20%;width:14%;height:60%"></div><div class="plant" style="left:5%;bottom:9%">🌿</div>';
+    case 'standby': return '<span class="band wait">等你回覆 <b data-sc="wait">0</b></span><span class="band idle">真閒置 <b data-sc="idle">0</b></span><div class="bandline"></div>'+
+      '<div class="furn couch" style="left:52%;top:74%;width:40%"></div><div class="plant" style="left:8%;bottom:7%">🌵</div>';
+    case 'offline': return '<div class="furn locker" style="left:39%;top:26%"></div><div class="furn locker" style="left:45%;top:26%"></div><div class="furn locker" style="left:51%;top:26%"></div><div class="plant" style="left:60%;top:38%">🧳</div>';
+    default:return '';
+  }
+}
+function makeRooms(){
+  ZONES.forEach(z=>{
+    const d=document.createElement('div');d.className='room';d.dataset.zone=z.key;
+    d.style.cssText=`left:${z.x}%;top:${z.y}%;width:${z.w}%;height:${z.h}%;--rc:${z.rc};--rf:${z.rf}`;
+    d.innerHTML=`<span class="rlabel">${z.label}</span><span class="rcount" data-c="${z.key}">0</span>`+
+      `<span class="rmore" data-m="${z.key}" style="display:none"></span>`+furnHTML(z.key);
+    floor.appendChild(d);
+  });
+  floor.appendChild(deskLayer);
+}
+// 座位自動縮放（修正：同區人一多就疊在一起）。欄數與人形縮放都跟著該區人數走，
+// 版面用參考視窗換算成 px（stage = 100vw x 100dvh-41px，固定滿版不捲動）。
+// 縮到 SEAT.min 仍塞不下才截頂，多出來的人改由房間角落的 +N 標示。
+const SEAT={w:60,h:60,min:0.34,maxRows:8,up:56,dn:4};
+// 子代理框（.person.mini）：w/h/up/dn 必須對得上 CSS 的 40x40 / margin:-38px。
+// SUB_DROP = 父腳到子腳的落差，讓子代理的框＋名牌整個落在父代理腳下（4 + 38 + 名牌 12）。
+const SUB={w:40,h:40,up:38,dn:2,gap:6};
+const SUB_DROP=SEAT.dn+SUB.up+12;
+// 一個「攤位」= 父代理框 ＋ 它腳下那排子代理框的外接矩形（未縮放 px）。
+// 子代理的位置一律從這個預算裡切出來，所以永遠壓不到隔壁父代理或別人的子代理。
+function stallBox(k){k=k|0;
+  return {w:Math.max(SEAT.w, k>0?k*SUB.w+(k-1)*SUB.gap:0),
+          h:k>0?SEAT.up+SUB_DROP+SUB.dn:SEAT.h};}
+// 每個座位帶（feet y，佔該區高度的比例）：單排時就坐在帶首，多排時在帶內平均展開。
+// grp 只出現在待命區：'wait' 坐上排、'idle' 坐下排，兩組視覺分開。
+// 座位帶的上緣要把「頭上的名牌」算進去，不是只算人形盒：SEAT.up(56) 描述的是 .person 的
+// CSS 盒，名牌是它外面再往上約 26px（高 21 + margin 5），所以 check-office2-seat-overlap
+// 量得到人、量不到字（plan 的人工閘門第 1 點講的就是這件事）。
+// 離線區特別擠：它只有 18% 高，其他區有 30~44%。實測 1920x855、14 個人：
+//   0.62(舊) 名牌離房間上緣只剩 3px、腳下卻空著 48px  ← owner:「下面還很寬，上面文字卻凸出去」
+//   0.70 → 14 / 37    0.76 → 23 / 29    0.82 → 31 / 21
+// 取 0.76：上下大致對稱，且 23px 容得下 21px 高的名牌。其餘區的餘裕本來就夠
+// （待命 83px、寫程式 66px），不動。
+// 待命區上半的「等你回覆」組同一個毛病但輕得多：0.30 時名牌凸出房間上緣 13px。
+// 實測 0.36→+1px、0.42→14px、0.48→28px。**不能照離線區那樣讓到 0.44**：
+// check-office2-seat-overlap 會紅 —— 帶寬縮到 0.12 之後 1024x768 放 23 個人只排得下 22 個。
+// 取 0.36：剛好不凸出（+1px），帶寬 0.20 仍容得下 1..24 人。
+const SEAT_BAND={def:[0.44,0.94], offline:[0.76,0.94], wait:[0.36,0.56], idle:[0.72,0.96]};
+function seatBand(zoneKey, grp){return SEAT_BAND[grp||zoneKey]||SEAT_BAND.def;}
+function seatGrid(zoneKey, grp, n, kmax){
+  const z=ZONES.find(q=>q.key===zoneKey), b=seatBand(zoneKey,grp);
+  // 自足式：fixture 會把這幾支函式單獨抽出來跑，呼叫外部 helper 會讓整批 check 紅。
+  // 820 = FLOOR_MIN_H，與 #floor 的 height 公式和 preflight 的 sh 三者必須一致。
+  const vw=(typeof innerWidth==='number'&&innerWidth)||1440;
+  const vh=Math.max((((typeof innerHeight==='number'&&innerHeight)||900)-41), 820);
+  const zw=z.w/100*vw, bandPx=(b[1]-b[0])*z.h/100*vh, st=stallBox(kmax);
+  // 取讓人形最大、且格寬/排距都容得下整個 bounding box 的欄列組合
+  // 由寬到窄掃欄數：同樣縮放下取排數最少（人擠人時先加欄，不是先疊排）
+  const fit=m=>{let best={rows:1,cols:m,s:0};
+    for(let cols=m;cols>=1;cols--){
+      const rows=Math.ceil(m/cols);
+      if(rows>SEAT.maxRows)continue;
+      // 最後一排的腳下還要放得下子代理那排，否則小人會掉出地板
+      const below=(100-(z.y+z.h*(rows>1?b[1]:b[0])))/100*vh;
+      const s=Math.min(1, zw/cols/st.w, rows>1?bandPx/(rows-1)/st.h:Infinity,
+                       below/(st.h-SEAT.up));
+      if(s>best.s)best={rows:rows,cols:cols,s:s};
+    }
+    return best;};
+  let cap=Math.max(1,n|0), g=fit(cap);
+  while(cap>1&&g.s<SEAT.min){cap--;g=fit(cap);}
+  g.cap=cap;return g;
+}
+function seatXY(zoneKey, idx, grp, n, kmax){
+  const z=ZONES.find(q=>q.key===zoneKey), b=seatBand(zoneKey,grp);
+  const g=seatGrid(zoneKey, grp, n||idx+1, kmax);
+  const col=idx%g.cols, row=Math.floor(idx/g.cols);
+  const fy=g.rows>1?b[0]+(b[1]-b[0])*row/(g.rows-1):b[0];
+  // colw = 這個座位分到的欄寬（佔地板寬度的 %）。座位演算法只保證「人形」不重疊
+  // （SEAT.w 的盒），名牌比人形寬得多且不在它的預算裡 —— 那正是待命區 6 人時名牌
+  // 凸出房間 29px 的原因（實測）。把欄寬一起回傳，place() 才能把名牌夾在自己的座位內。
+  return {px:z.x+z.w*((col+0.5)/g.cols), py:z.y+z.h*fy, s:g.s, cap:g.cap, colw:z.w/g.cols};
+}
+// 子代理座位：切在父代理自己那格的 stallBox 預算裡（腳下一排、置中）。
+// 舊版是固定 offset 表 ＋ 全區 clamp：相鄰父代理的小人會被夾到同一點而完全疊住。
+function subXY(seat, i, k){
+  // 自足式：fixture 會把這幾支函式單獨抽出來跑，呼叫外部 helper 會讓整批 check 紅。
+  // 820 = FLOOR_MIN_H，與 #floor 的 height 公式和 preflight 的 sh 三者必須一致。
+  const vw=(typeof innerWidth==='number'&&innerWidth)||1440;
+  const vh=Math.max((((typeof innerHeight==='number'&&innerHeight)||900)-41), 820);
+  const dx=(i-(k-1)/2)*(SUB.w+SUB.gap)*seat.s;
+  return {px:seat.px+dx/vw*100, py:seat.py+SUB_DROP*seat.s/vh*100};
+}
+// 辦公桌：一個座位一張，座標整個從 seatXY 推導——桌面就貼在那個人的腳邊（seat.py 就是腳），
+// 寬高跟著同一個 seat.s 縮放。人數從 1 變到 24 時，桌與人是同一組座標一起變，不可能各走各的
+// （舊版是 furnHTML 裡固定百分比的兩張桌，跟座位是兩套互不相干的座標，人永遠浮在桌上方）。
+// w 比 SEAT.w(60) 窄，所以相鄰欄位的桌面永遠不會互相壓到；h 對得上 CSS .furn.desk 的 15px。
+const DESK={w:54,h:15};
+// 有桌子的區：CLI 排隊是機櫃、待命區是沙發、離線區是置物櫃，那三區本來就不放辦公桌。
+const DESK_ZONES={coding:1,docs:1,testing:1,review:1,council:1};
+function deskXY(seat){
+  // 自足式：fixture 會把這幾支函式單獨抽出來跑，呼叫外部 helper 會讓整批 check 紅。
+  // 820 = FLOOR_MIN_H，與 #floor 的 height 公式和 preflight 的 sh 三者必須一致。
+  const vw=(typeof innerWidth==='number'&&innerWidth)||1440;
+  const vh=Math.max((((typeof innerHeight==='number'&&innerHeight)||900)-41), 820);
+  const w=DESK.w*seat.s/vw*100, h=DESK.h*seat.s/vh*100;
+  return {px:seat.px-w/2, py:seat.py, pw:w, ph:h};
+}
+// tot/kmx 就是 render() 餵給 place() 的同兩張表：桌與人吃同一組輸入、走同一支 seatXY，
+// 所以畫得出人的每一個座位都恰好有一張桌，畫不出來（超過 cap、改由 +N 交代）的就沒有。
+function deskHTML(tot, kmx){
+  let html='';
+  Object.keys(tot).forEach(bk=>{
+    const i=bk.indexOf(':'), zone=i<0?bk:bk.slice(0,i), grp=i<0?null:bk.slice(i+1);
+    if(!DESK_ZONES[zone])return;
+    const n=tot[bk], k=(kmx&&kmx[bk])||0;
+    for(let j=0;j<n;j++){
+      const seat=seatXY(zone, j, grp, n, k);
+      if(j>=seat.cap)break;
+      const d=deskXY(seat);
+      html+=`<div class="furn desk" style="left:${d.px}%;top:${d.py}%;width:${d.pw}%;height:${d.ph}%"></div>`;
+    }
+  });
+  return html;
+}
+// 名牌上的 label 是後端文字（專案名／thread 名）且走 innerHTML：比照 dashboard 的
+// esc(r.label)（ui/dashboard.html）轉義，絕不讓它變成活的標記。
+function esc(s){return (s==null?'':''+s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+// 人身上的 tooltip：分區證據（a.route）＋既有的 Task 進度。dashboard 把
+// signalDeskRouteLabel 掛在辦公桌的 aria-label／檢視面板的「Routing evidence」上，
+// office2 沒有面板，就掛在同一個人身上；沒有可信的理由時整段不出現。
+function personTip(a){
+  const t=a&&a.task?`Task ${a.task.idx}/${a.task.total}: ${a.task.cur||''}${a.task.eta?' · '+a.task.eta:''}`:'';
+  // a.tip 只有 PR 小人有（PR 標題＋網址）：名牌塞不下，但滑上去要看得到是哪一個 PR
+  return [(a&&a.tip)||'', (a&&a.route)||'', elapsedText(a), t].filter(Boolean).join(' · ');}
+function personEl(a, mini){
+  const p=document.createElement('div');
+  // 相鄰的兄弟子代理座位只差約 56px，名牌帶上父代理名之後一定比座距寬（實測兩張疊 103px），
+  // 縮字寬救不回來。錯開高度也不行：離線列貼著地板底緣，往下讓的那張會掉出地板 34px、
+  // 超出視窗 10px（實測）。改成左右錯開 —— 只有真的有兄弟時才讓，單獨一個子代理維持置中。
+  p.className='person'+(mini?' mini':'')+(a.small?' small':'')+' st-'+(a.st||'idle')
+    +(a.st==='stopped'||a.st==='stale'?' st-stopped':'')
+    +((mini&&a.sibs>1)?' sib':'')+((mini&&a.seq&&a.seq%2===0)?' alt':'');
+  const v=VEND[a.vend]||{em:'?',color:'#30363d'};
+  const dot=STDOT[a.st]||'#6e7681';
+  const cre=CREATURES[(a.cre||0)%CREATURES.length];
+  p.style.setProperty('--vend', v.color);
+  // 同批啟動的顏色（a.batch = 後端 group_key），子代理跟著父代理同一批
+  p.style.setProperty('--batch', batchColor(a.batch));
+  // 進度是「第幾項／共幾項」。task_index 後端不是每列都給（實測有些 repo 就沒有），
+  // 直接內插會把 null 印進名牌（實測畫出 "null/2"）——不是數字就退回 task_done，兩個都不是
+  // 就整個不畫，絕不在標題上留一個 null。
+  const ti=a.task?(typeof a.task.idx==='number'?a.task.idx
+                  :typeof a.task.done==='number'?a.task.done:null):null;
+  const tp=(a.task&&ti!==null)?` <span class="tprog">${ti}/${esc(a.task.total)}</span>`:'';
+  // 機器徽章（登錄簿有這台）取代純 OS 字形：同一個字形不畫兩次
+  const oi=osIcon(a), mb=machBadge(a), os=mb||(oi?`<span class="osi">${oi}</span>`:'');
+  const cx=ctxBadge(a.ctx)+tokBadge(a.ctx_tokens), sa=mini?'':staleBadge(a);
+  const pm=mini?'':pmBadge(a), hk=mini?'':hookBadge(a), sx=mini?'':subsBadge(a);
+  // 專案／模型／開放任務數／最後活動同樣只掛在 session 自己的名牌上（子代理沒有自己的），
+  // 排列順序沿用 ui/dashboard.html rowsTbl 那一列：專案 → 權限模式 → 模型 →（ctx／stale）
+  // → 開放任務數 → hook → 子代理，相對時間收在最右邊。
+  const pj=mini?'':projBadge(a), md=mini?'':modelBadge(a), tb=mini?'':tasksBadge(a),
+        ag=mini?'':ageBadge(a);
+  // 沒有 label 時退回 dashboard 自己在用的短 session key（r.sub，深視圖連結上的那串），
+  // 而不是只在 office2 內部有意義的迴圈序號——藏起來的子代理要查得到是哪一個 session。
+  // 子代理掛「父代理名 ▸ 序」，其餘照舊（label → 短 key → 序號）
+  const nm=(mini&&a.parent)?`${a.parent} ▸ ${a.seq||1}`:(a.label||a.sub||a.id);
+  p.innerHTML=`<div class="nameplate"><span class="sdot" style="background:${dot}"></span>${os}<span class="pname">${esc(nm)}</span><span class="em" style="color:${v.color}">${v.em}</span>${tp}${pj}${pm}${md}${cx}${sa}${tb}${hk}${sx}${ag}</div>`+
+    `<div class="avatar"><div class="bglow"></div><div class="shadow"></div><div class="vring"></div><img class="cre-img" src="${cre.img}" alt="${cre.key}" draggable="false"><div class="emblem">${v.em}</div></div>`+
+    (a.council?`<div class="taskbar council">${a.council}</div>`
+      :a.wait?`<div class="taskbar wait">${a.wait}</div>`
+      // PR 卡在哪（PR_STATE 是本檔的固定文案表，同 council/wait，不是外來資料）
+      :a.prst?`<div class="taskbar prs">${a.prst}</div>`
+      // eta 是後端原字串（council/wait 是本檔的固定文案表，不是外來資料）。節點被重用時
+      // 走的是 textContent（下面 place() 那段），但「第一次建立」走 innerHTML —— 少了這個
+      // esc()，同一個值在第一輪是 HTML、第二輪才變純文字。
+      :a.task&&a.task.eta?`<div class="taskbar">${esc(a.task.eta)}</div>`:'');
+  p.title=personTip(a);
+  return p;
+}
+const nodes={};
+function place(a, animate, tot, kmx){
+  const grp=standbyGroup(a), bk=a.zone+(grp?':'+grp:'');
+  const zc=seatUse[bk]=(seatUse[bk]||0);seatUse[bk]=zc+1;
+  const seat=seatXY(a.zone, zc, grp, (tot&&tot[bk])||zc+1, (kmx&&kmx[bk])||0),
+        px=seat.px, py=seat.py;
+  if(zc>=seat.cap){ // 縮到底仍塞不下：不畫，改由房間角落的 +N 交代，絕不疊人
+    seatOver[a.zone]=(seatOver[a.zone]||0)+1;
+    [a.id].concat((a.subs||[]).map(s=>s.id)).forEach(id=>{if(nodes[id]){nodes[id].remove();delete nodes[id];}});
+    return;
+  }
+  let p=nodes[a.id];
+  if(!p){p=personEl(a);floor.appendChild(p);nodes[a.id]=p;p.style.left=px+'%';p.style.top=py+'%';}
+  else{if(animate){const cur=parseFloat(p.style.left);p.classList.toggle('flip',px<cur);p.classList.add('walking');setTimeout(()=>p.classList.remove('walking'),1400);}p.style.left=px+'%';p.style.top=py+'%';}
+  // small:true 的（目前只有 PR 小人）畫小一號。刻意不套 .person.mini：那個 class 綁死
+  // 40x40 / margin:-38px 的子代理盒模型（見上面 subXY 的註解與 seat-overlap fixture），
+  // 借過來會讓「子代理」的幾何契約多出一種不是子代理的東西。縮放走座位比例即可。
+  p.style.setProperty('--ps', seat.s*(a.small?SMALL_SCALE:1));
+  // 名牌不得比自己的座位寬：座位演算法只保證人形不疊，整張名牌（實測 130px）比座距（6 人
+  // 時約 72px）寬得多，多出來的就跨出房間。這裡算的是「整張牌」的預算＝欄寬減 8px 的縫，
+  // 不設下限 —— 先前那個 44px 下限是錯的：牌上還有圓點／徽章等固定寬度，名字縮到下限整張
+  // 牌仍然超寬（實測 6 人時仍凸出 16px）。放不下就由 npnarrow 整張收起，靠 hover 看。
+  // 92 / 8 / 56 刻意寫成字面值而非外部常數：fixture 會把 place() 單獨抽出來跑，抽不到的
+  // 識別字會讓整批 check 紅（同檔 seatXY/deskXY 的「自足式」註解講的是同一件事）。
+  const npw=Math.min(92*seat.s,
+    seat.colw/100*((typeof innerWidth==='number'&&innerWidth)||1440) - 8);
+  p.style.setProperty('--npw', npw + 'px');
+  // 56px 是「圓點＋家別徽章＋左右 padding 之後還剩得下幾個字」的界線（實測牌上固定部分
+  // 約佔 38px）。低於它，畫出來的是一張讀不出名字、又壓到鄰座的牌。
+  p.classList.toggle('npnarrow', npw < 56);
+  // nodes are reused across polls, so the routing evidence / elapsed / task tooltip has to
+  // be refreshed here too -- a session that stops keeps the old reason otherwise
+  p.title=personTip(a);
+  // 相對時間每一輪都在走，人形卻是跨輪重用的：age 徽章要重蓋一次，否則它會停在人形被建立
+  // 的那一刻，愈看愈新（textContent／title 直接寫值，不經過 innerHTML）
+  const ab=p.querySelector('.ageb');
+  if(ab){ab.textContent=ago(a.ts);ab.title=a.last||'';}
+  // nodes are reused across polls, so the council sub-phase label must be refreshed here
+  const bar=p.querySelector('.taskbar'), txt=a.council||a.wait||a.prst||(a.task&&a.task.eta)||'';
+  if(txt){const cls='taskbar'+(a.council?' council':a.wait?' wait':a.prst?' prs':'');
+    if(bar){bar.textContent=txt;bar.className=cls;}
+    else{const d=document.createElement('div');d.className=cls;d.textContent=txt;p.appendChild(d);}}
+  else if(bar)bar.remove();
+  const subs=a.subs||[];
+  // 子代理帶著自己的 vendor 與 status（mapStatus 從 mini_rows 每列讀來），不再複製父代理的：
+  // 停掉的子代理掛在執行中的父代理下，以前會被畫成執行中。
+  subs.forEach((s,i)=>{
+    const sid=s.id;
+    let m=nodes[sid];
+    const q=subXY(seat, i, subs.length), mx=q.px, my=q.py;
+    // parent/seq 要一起傳進去，名牌才掛得出「父代理名 ▸ 序」；漏傳就退回只印 A#.# 序號，
+    // 那正是 owner 2026-07-28 指出的「只能用造型判定是誰的子代理」。
+    if(!m){m=personEl({id:sid,parent:s.parent,seq:s.seq,sibs:subs.length,vend:s.vend,cre:a.cre,st:s.st,batch:a.batch}, true);floor.appendChild(m);nodes[sid]=m;m.style.left=mx+'%';m.style.top=my+'%';}
+    else{if(animate){m.classList.add('walking');setTimeout(()=>m.classList.remove('walking'),1400);}m.style.left=mx+'%';m.style.top=my+'%';}
+    m.style.setProperty('--ps', seat.s);
+  });
+}
+function render(animate){
+  for(const k in seatUse)delete seatUse[k];
+  for(const k in seatOver)delete seatOver[k];
+  const live=new Set();
+  // 先數出每個座位桶的人數與最多子代理數，seatXY 才能依此決定欄數與縮放
+  const tot={},kmx={};AGENTS.forEach(a=>{const g=standbyGroup(a);const bk=a.zone+(g?':'+g:'');
+    tot[bk]=(tot[bk]||0)+1;kmx[bk]=Math.max(kmx[bk]||0,(a.subs||[]).length);});
+  // 桌子先於人重畫：同一組 tot/kmx 進 seatXY，人站哪裡桌就在哪裡
+  deskLayer.innerHTML=deskHTML(tot,kmx);
+  AGENTS.forEach(a=>{live.add(a.id);(a.subs||[]).forEach(s=>live.add(s.id));place(a,animate,tot,kmx);});
+  Object.keys(nodes).forEach(id=>{if(!live.has(id)){nodes[id].remove();delete nodes[id];}});
+  const cnt={};AGENTS.forEach(a=>cnt[a.zone]=(cnt[a.zone]||0)+1);
+  document.querySelectorAll('.rcount').forEach(e=>e.textContent=cnt[e.dataset.c]||0);
+  const sb={wait:0,idle:0};AGENTS.forEach(a=>{const g=standbyGroup(a);if(g)sb[g]++;});
+  document.querySelectorAll('[data-sc]').forEach(e=>e.textContent=sb[e.dataset.sc]||0);
+  document.querySelectorAll('.rmore').forEach(e=>{const k=seatOver[e.dataset.m]||0;
+    e.textContent=k?'+'+k:'';e.style.display=k?'':'none';});
+}
+
+// ---- map real /api/status -> agents (session=creature, vendor=emblem, work_kind=zone) ----
+function hashInt(s){let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return h;}
+// 同批啟動的顏色：後端的 group_key（monitor.py：同一次 launch 的所有 session 共用一個值）
+// 就是 ui/dashboard.html 的 batchColor 用的鍵。調色盤原樣鏡一份它的 BATCH_PALETTE，
+// office2 不自創第二套（比照 ROUTE_EVIDENCE：只鏡一份，漂移交給 preflight 抓）。
+const BATCH_PALETTE=['#8156D8','#D08A32','#2B9A92','#C74B79'];
+function batchColor(k){return BATCH_PALETTE[hashInt(String(k==null?'':k))%BATCH_PALETTE.length];}
+// 展示序 A#：以前是這一輪的迴圈序號（n++），有 session 進出時整批重排；而 A# 同時是節點鍵，
+// 重排等於把畫好的人形換給別的 session。後端 spawn 出來的列自帶 agent_idx（monitor.py 的
+// spawn provenance），ui/dashboard.html 的 signalDeskOrdinals 就是拿它當固定號（agent_idx+1），
+// office2 照做。沒有 agent_idx 的列（不是 autopilot 起的）才退回本輪序號，且一律避開已被
+// 固定號佔走的數字——兩個 session 撞到同一個 A# 會共用同一個人形。
+function officeOrdinals(rows){
+  const fixed=new Set();
+  const fix=rows.map(function(r){const ai=r.agent_idx;
+    if(Number.isInteger(ai)&&ai>=0&&!fixed.has(ai+1)){fixed.add(ai+1);return ai+1;}
+    return 0;});
+  let next=1;
+  return fix.map(function(o){if(o)return o;
+    while(fixed.has(next))next++;
+    fixed.add(next);return next++;});
+}
+// zone priority (fixed): offline > council > review > work_detail > standby
+function zoneOf(r){if(r.status==='stopped'||r.status==='stale')return 'offline';
+  if(r.work_council&&r.work_council.in_council)return 'council'; // 3AI 共議 (main agent only)
+  if(r.work_review)return 'review';   // active reviewer/panel subagents (agentType)
+  const wk=r.work_kind;if(wk==='cli_queue')return 'cli';if(wk==='standby')return 'standby';
+  if(wk==='working'){const d=r.work_detail;return d==='docs'?'docs':d==='test'?'testing':'coding';}
+  return 'standby';}
+// CLI-bridge now_running -> helper tokens in the CLI-queue zone (real live pids only).
+function mapCliBridge(cb){
+  return ((cb&&cb.now_running)||[]).map(function(j){
+    const vend=CLIVEND[String(j.agent||'').toLowerCase()]||'codex';
+    return {id:'cli·'+j.agent+'·'+j.pid, label:'⚙'+j.agent, vend:vend,
+      cre:hashInt(String(j.agent)+String(j.pid))%CREATURES.length,
+      zone:'cli', st:'working', subs:[], helper:true};
+  });
+}
+// /api/prs -> PR 區的小人（一個未關的 PR 一個人）。比照 mapCliBridge：它們不是 session，
+// 只是借同一套人形畫法站在自己的區裡，所以帶 helper:true（不進 subs、不吃 session 徽章）。
+// 造型沿用同一池 per-session 人形（與 session 同一個 CREATURES 註冊表），
+// 只是 small:true 畫小一號；靠 repo#number 雜湊指派，同一個 PR 每次都是同一隻。
+// vend 一律留空：PR 沒有 AI 家別，硬塞一個家別等於編造訊號（personEl 會落到中性的 '?' 徽章）。
+function mapPRs(d){
+  return (((d&&d.rows)||[])).map(function(p){
+    const repo=String(p.repo||''), short=repo.indexOf('/')>=0?repo.slice(repo.indexOf('/')+1):repo;
+    const key=repo+'#'+p.number;
+    // 號碼放最前面：一格站 6 個時名牌只有 64px，repo 在前會把 "#135" 這個唯一識別
+    // 的部分截掉（實測某些長名 repo）。號碼在前，截到的永遠是 repo 的尾巴。
+    return {id:'pr·'+key, label:'#'+p.number+' '+short, vend:'',
+      cre:hashInt(key)%CREATURES.length, zone:'pr', st:'standby', subs:[],
+      helper:true, small:true,
+      // 卡在哪：後端已分好桶，認不得的值不畫標籤（不退回猜一個狀態）
+      prst:(PR_STATE[p.state]||'')+(p.draft?' · 草稿':''),
+      // 滑上去才看得到完整標題與連結網址；名牌只留 repo #號，寬度才不會爆
+      tip:(p.title||'')+(p.url?' — '+p.url:'')};
+  });
+}
+// 空的 PR 區有三種完全不同的意思，區標題必須講得出是哪一種：真的沒有未關的 PR／GitHub
+// 查不到（gh 沒裝、沒登入、斷網）／查失敗但還留著上次結果。後端已用 available/stale/note
+// 把三者分開，這裡只負責說出來 —— 讓「查不到」長得像「沒有 PR」正是要避免的假訊號。
+function prNote(d){
+  const room=floor.querySelector('.room[data-zone="pr"]');if(!room)return;
+  const lab=room.querySelector('.rlabel');if(!lab)return;
+  const bad=!d||!d.available||d.stale;
+  lab.textContent=bad?'PR ⚠':'PR';
+  // 看到的是哪一組要講出來：同樣「3 個」，在 public 與 all 底下是完全不同的意思。
+  const sc=PR_SCOPE[d&&d.scope]||'';
+  room.title=!d?'讀不到 /api/prs（monitor 沒回應）'
+    :d.stale?('GitHub 這輪查不到，顯示的是上一次的結果：'+(d.note||''))
+    :d.available?('GitHub 上未關的 PR：'+(((d.rows||[]).length))+' 個'+(sc?'（'+sc+'）':''))
+    :('查不到 GitHub PR：'+(d.note||''));
+}
+// stale 保留成自己的狀態（人形仍走 st-stopped 的灰化，比照 dashboard 把 stale 的姿勢當 stopped）
+function stOf(s){return s==='stale'?'stale':s==='stopped'?'stopped':s==='waiting'?'waiting':s==='idle'?'standby':'working';}
+// 子代理是後端自己的一列（monitor._mini_rows 每列自帶 vendor/status），不是父代理的影子。
+// stOf 沒有白名單，未知／缺漏的值會落到 'working'——套在子代理身上就是「停掉的被畫成執行中」。
+// 比照 dashboard 的 normalizeStatus（不認得就退回 idle，office2 的待命）與 normalizeVendor
+// （不認得就退回未知 vendor，personEl 已有的 '?' 灰底）：兩者一律不向父代理繼承。
+const ST_KNOWN=['running','idle','waiting','stopped','stale'];
+function subSt(s){return stOf(ST_KNOWN.indexOf(s)>=0?s:'idle');}
+function subVend(v){return CLIVEND[String(v==null?'':v).toLowerCase()]||'';}
+function mapStatus(d){
+  const out=[], raw=[];
+  [['claude','cc'],['codex','codex'],['hermes','hermes'],['copilot','copilot'],['antigravity','antigravity']].forEach(function(b){
+    (d[b[0]]||[]).forEach(function(r){if(r.session_id)raw.push({vend:b[1], row:r});});
+  });
+  // 先把整輪的展示序算出來（固定號優先），再建人：id 不再是「這一輪剛好第幾個」
+  const ORD=officeOrdinals(raw.map(function(x){return x.row;}));
+  raw.forEach(function(x, oi){
+      const r=x.row, id='A'+ORD[oi];
+      // 子代理的名牌先前只印序號（A5.1），跟父代理的名牌（印專案名）對不起來，owner
+      // 2026-07-28：「只顯示 2.1 2.2 這種只能用造型判定」。帶上父代理正在顯示的同一個
+      // 字串當前綴，名牌就自己說得出是誰的子代理。id 維持 A#.# 不動 —— preflight
+      // (tools/preflight_ui.py:4873) 釘死了這個形狀，node map 也是拿它當 key。
+      const subs=(r.mini_rows||[]).map((m,i)=>({id:id+'.'+(i+1),
+        parent:r.label||(typeof r.sub==='string'?r.sub:'')||id, seq:i+1,
+        vend:subVend(m&&m.vendor), st:subSt(m&&m.status)}));
+      // 子代理真數：mini_rows 已被後端截頂，r.subagents 才是真數。取法沿用 dashboard 的
+      // officeRows（`r.subagents||minis.length`）：後端沒給就退回畫得出身分的個數，不虛報。
+      const subs_total=(typeof r.subagents==='number'&&r.subagents>0)?r.subagents:subs.length;
+      out.push({id, vend:x.vend, cre:hashInt(String(r.session_id))%CREATURES.length,
+        zone:zoneOf(r), st:stOf(r.status), subs, subs_total,
+        // 同批啟動：後端 group_key（同一次 launch 的所有 session 一個值）就是 Signal Desk
+        // batchColor 用的鍵；沒有就退回自己的 session，比照 ui/dashboard.html 的
+        // groupKey:String(r.group_key||r.session_id) 同一條退路。
+        batch:String(r.group_key||r.session_id),
+        label:r.label||'',   // 哪一個 session（dashboard 用 esc(r.label)）；沒有才退回短 key／序號
+        sub:typeof r.sub==='string'?r.sub:'',   // 短 session key（dashboard 深視圖連結的文字）
+        // dashboard rowsTbl 一直在畫的四個列訊號：專案（與 label 相同時不畫）、模型、
+        // 開放任務數（`tasks`，跟下面那個 task_total 進度是不同欄位）、最後活動時間
+        // （ts 換相對時間、last 是原始 ISO，兩個都要才有 dashboard 那格的完整意思）
+        project:typeof r.project==='string'?r.project:'',
+        model:typeof r.model==='string'?r.model:'',
+        tasks:typeof r.tasks==='number'?r.tasks:null,
+        ts:(typeof r.ts==='number'&&r.ts>0)?r.ts:null,   // 負數／NaN 的 epoch 是壞值，當沒有
+        last:typeof r.last==='string'?r.last:'',
+        // 這一回合跑了多久（後端只在 running/waiting 給）：不是數字就當沒有，不編造時間
+        elapsed:typeof r.elapsed==='number'?r.elapsed:null,
+        os:r.os||'', machine:r.machine||'',   // OS/機器訊號（dashboard 已用，office2 先前漏接）
+        // context window %：後端沒讀數時是 null（relay 列也可能整欄缺），只有真的是數字才畫 badge
+        ctx: typeof r.ctx==='number' ? r.ctx : null,
+        // cost axis: absolute tokens re-read per turn; only a real number draws
+        ctx_tokens: typeof r.ctx_tokens==='number' ? r.ctx_tokens : null,
+        // 失聯多久（秒）：只有 relay 列在快照過期時才有；不是數字就當沒有，絕不編造分鐘數
+        stale_age: typeof r.stale_age==='number' ? r.stale_age : null,
+        // hook 健康度 {hits,cancelled,errors}：relay 列整欄是 {}；次數的清洗在 hookBadge 裡
+        hooks: (r.hooks&&typeof r.hooks==='object') ? r.hooks : null,
+        // 權限模式：'default'／不認得的值不畫（比照 dashboard 的 pmBadge）
+        pmode: typeof r.pmode==='string' ? r.pmode : '',
+        wait: standbyWait(r),   // 待命區才有：等你回覆組的既有 label（無 wait_kind = 真閒置）
+        route: routeEvidence(r),   // 分區證據：後端 work_reason 的既有文案（認不得就空字串）
+        council: (r.work_council&&r.work_council.in_council)
+                 ? (COUNCIL_PHASE[r.work_council.phase]||null) : null,
+        // 進度三個數字一律驗型別再收：total 先前只做真值判斷，非數字（例如後端送字串）
+        // 會原樣走到 personEl 的樣板字串裡變成 HTML；done 先前用 `||0`，缺值被硬轉成 0，
+        // 於是「兩個進度欄位都沒有」的列還是畫得出 0/total，跟不編造數字的規矩相牴觸。
+        task: (typeof r.task_total==='number'&&r.task_total>0)
+              ? {done:typeof r.task_done==='number'?r.task_done:null,
+                 total:r.task_total,
+                 idx:typeof r.task_index==='number'?r.task_index:null,
+                 cur:r.task_current||'', eta:r.task_eta||''} : null});
+  });
+  // Two DIFFERENT sessions sharing a sprite is a bug, not a cosmetic tradeoff: the sprite IS the
+  // identity, and only a subagent is meant to look like its parent. hashInt(id)%N alone collides
+  // even when the pool is larger than the headcount (measured 2026-07-28: 26 creatures, 12 real
+  // sessions, 4 still sharing), so the hash is only the STARTING point — probe forward to the next
+  // free creature. Deterministic: rows are walked in session-id order, so the same set of sessions
+  // always yields the same assignment regardless of arrival order. Only with more sessions than
+  // creatures does anything repeat, and then in a defined order rather than at random.
+  // Inlined on purpose: the preflight fixtures brace-extract THIS function and run it standalone
+  // under node, so it must not call a helper defined outside itself.
+  const _creOrder=out.slice().sort(function(a,b){return String(a.id).localeCompare(String(b.id));});
+  const _creUsed=new Set(), _creN=CREATURES.length;
+  _creOrder.forEach(function(row){
+    let i=(typeof row.cre==='number'?row.cre:0)%_creN;
+    for(let step=0;step<_creN&&_creUsed.has(i);step++)i=(i+1)%_creN;
+    if(_creUsed.size<_creN)_creUsed.add(i);
+    row.cre=i;
+  });
+  return out;
+}
+let pollTimer=null;
+async function poll(){
+  try{
+    const d=await fetch('/api/status').then(r=>r.json());
+    MACHINES=d.machines||{};   // 機器登錄簿跟著狀態一起來（office2 不自備副本）
+    LOCALM=d.local_machine||'';  // 本機是簿子上的哪一把鑰匙（本機列沒有 machine 欄）
+    LOCALOS=d.local_os||'';      // 本機的 OS：用來分辨「本機列」與「掛載他機 root 的列」
+    const mapped=mapStatus(d);
+    let helpers=[];
+    try{helpers=mapCliBridge(await fetch('/api/cli-bridge').then(r=>r.json()));}catch(e){}
+    // PR 區：/api/prs 自己快取（後端依 poll_seconds），這裡跟其他區同一輪拉。抓不到就
+    // 讓 PR 區留空 —— 空的 PR 區與「查不到」是兩件事，後端已用 available/stale 分開，
+    // 區標題的 note 由 prNote() 說明，這裡絕不塞假的 PR。
+    let prs=[];
+    try{const pd=await fetch('/api/prs').then(r=>r.json());prs=mapPRs(pd);prNote(pd);}
+    catch(e){prNote(null);}
+    const all=mapped.concat(helpers, prs);
+    AGENTS=all;render(true);   // includes the empty case: no sessions means an empty floor, not a demo
+    document.querySelector('.proto').textContent=all.length
+      ? 'LIVE · 你的真實 session'
+      : 'LIVE · 目前沒有任何 session';
+    clearTimeout(pollTimer);pollTimer=setTimeout(poll,Math.max(4,(d.poll_seconds||30))*1000);
+  }catch(e){   // the monitor is unreachable: say so, never fall back to invented agents
+    AGENTS=[];render(true);
+    document.querySelector('.proto').textContent='⚠ 讀不到 /api/status — 畫面留空，不顯示假資料';
+    clearTimeout(pollTimer);pollTimer=setTimeout(poll,15000);}
+}
+makeRooms();render(false);poll();
+
+// 展開的名牌不可以被切掉（owner 2026-07-28「TOOLTIP 會被切到，要在最上層」）。
+// z-index 治不了這個：切它的是 #stage 的 overflow:hidden，而 .person 帶著 transform
+// （scale 算出來是 matrix(1,0,0,1,0,0)，不是 none），會變成 fixed 定位的 containing
+// block —— 所以連 position:fixed 都逃不出那個裁切框。實測最上排的人 hover 時，面板
+// 頂端在 -27px（超出視窗），比 #stage 上緣高 65px。
+// 因此改成量出來再決定往哪邊開：上面塞不下就往下開。用 mouseover 委派（冒泡，
+// 一個 listener 管全場，人形是每輪重建的所以不能各自綁）。
+floor.addEventListener('mouseover', function(e){
+  const p = e.target.closest && e.target.closest('.person');
+  if (!p) return;
+  // mouseover 會在同一個人的子元素之間反覆冒泡（名牌→圖→光暈…）。沒有這道 guard，
+  // 每次移動都要 remove class + 讀兩個 rect，等於每個 mousemove 都逼一次同步 layout。
+  // 只有「真的從外面進到這個人身上」才量。
+  if (e.relatedTarget && p.contains(e.relatedTarget)) return;
+  const np = p.querySelector('.nameplate');
+  if (!np) return;
+  p.classList.remove('npdown');        // 先還原，才量得到「原本要往上開」的真實高度
+  const st = document.getElementById('stage').getBoundingClientRect();
+  const r = np.getBoundingClientRect();
+  // hover 樣式此刻已套用（mouseover 在 :hover 生效之後才派送），量到的就是展開後的盒
+  if (r.top < st.top) p.classList.add('npdown');
+});
+floor.addEventListener('mouseout', function(e){
+  const p = e.target.closest && e.target.closest('.person');
+  if (p && !p.contains(e.relatedTarget)) p.classList.remove('npdown');
+});
+
+// Both demo buttons were removed 2026-07-28 at the owner's instruction. They moved agents between
+// zones on demand, which meant a populated zone could not be trusted as evidence that real data
+// reaches it — the exact question the owner needs answered. Nothing may move an agent except a
+// change in the data from /api/status.
+setInterval(()=>{document.getElementById('clock').textContent=new Date().toLocaleTimeString();},1000);
+</script></body></html>

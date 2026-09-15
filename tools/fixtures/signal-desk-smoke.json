@@ -1,0 +1,58 @@
+{
+  "status_snapshots": [
+    {
+      "generated": "2026-07-24T12:00:00Z",
+      "poll_seconds": 3600,
+      "machines": {},
+      "authz_pending": 0,
+      "handoff": {"counts": {"OPEN": 0, "DONE": 0, "SUPERSEDED": 0, "WITHDRAWN": 0}, "buckets": {}, "owner_groups": {}, "platform_counts": {}, "open": []},
+      "hook_health": [], "presets": [], "spawns": [],
+      "claude": [
+        {"session_id": "signal-parent", "label": "Signal parent", "source_ai": "claude", "vendor": "claude", "group_key": "launch-signal", "agent_idx": 0, "status": "running", "work_kind": "working", "work_reason": "active_tail", "task_current": "Implement fixture smoke", "mini_rows": [{"session_id": "signal-parent/child-1", "vendor": "codex", "status": "running"}], "subagents": 1, "elapsed": 90, "os": "win"},
+        {"session_id": "signal-review", "label": "Signal reviewer", "source_ai": "claude", "vendor": "claude", "group_key": "launch-review", "agent_idx": 1, "status": "idle", "work_kind": "standby", "work_reason": "remote_no_live_tail", "mini_rows": [], "subagents": 0, "os": "win"}
+      ],
+      "codex": [], "hermes": [], "antigravity": [], "copilot": []
+    },
+    {
+      "generated": "2026-07-24T12:00:01Z",
+      "poll_seconds": 3600,
+      "machines": {},
+      "authz_pending": 0,
+      "handoff": {"counts": {"OPEN": 0, "DONE": 0, "SUPERSEDED": 0, "WITHDRAWN": 0}, "buckets": {}, "owner_groups": {}, "platform_counts": {}, "open": []},
+      "hook_health": [], "presets": [], "spawns": [],
+      "claude": [
+        {"session_id": "signal-parent", "label": "Signal parent", "source_ai": "claude", "vendor": "claude", "group_key": "launch-signal", "agent_idx": 0, "status": "waiting", "work_kind": "standby", "work_reason": "remote_no_live_tail", "task_current": "Await review", "mini_rows": [{"session_id": "signal-parent/child-1", "vendor": "codex", "status": "idle"}], "subagents": 1, "elapsed": 120, "os": "win"},
+        {"session_id": "signal-review", "label": "Signal reviewer", "source_ai": "claude", "vendor": "claude", "group_key": "launch-review", "agent_idx": 1, "status": "idle", "work_kind": "standby", "work_reason": "remote_no_live_tail", "mini_rows": [], "subagents": 0, "os": "win"}
+      ],
+      "codex": [], "hermes": [], "antigravity": [], "copilot": []
+    },
+    {
+      "generated": "2026-07-24T12:00:02Z",
+      "poll_seconds": 3600,
+      "machines": {},
+      "authz_pending": 0,
+      "handoff": {"counts": {"OPEN": 0, "DONE": 0, "SUPERSEDED": 0, "WITHDRAWN": 0}, "buckets": {}, "owner_groups": {}, "platform_counts": {}, "open": []},
+      "hook_health": [], "presets": [], "spawns": [],
+      "claude": [
+        {"session_id": "signal-parent", "label": "Signal parent", "source_ai": "claude", "vendor": "claude", "group_key": "launch-signal", "agent_idx": 0, "status": "stopped", "work_kind": "standby", "work_reason": "status_stopped", "mini_rows": [{"session_id": "signal-parent/child-1", "vendor": "codex", "status": "stopped"}], "subagents": 1, "elapsed": 150, "os": "win"},
+        {"session_id": "signal-review", "label": "Signal reviewer", "source_ai": "claude", "vendor": "claude", "group_key": "launch-review", "agent_idx": 1, "status": "idle", "work_kind": "standby", "work_reason": "remote_no_live_tail", "mini_rows": [], "subagents": 0, "os": "win"}
+      ],
+      "codex": [], "hermes": [], "antigravity": [], "copilot": []
+    }
+  ],
+  "ports": {
+    "generated": "2026-07-24T12:00:00Z",
+    "ports": [{"port": 9010, "proc": "fixture-monitor", "pool_source": "ai_opened"}],
+    "tasks": [{"name": "fixture-task", "pool_source": "ai_scheduled"}]
+  },
+  "cli_bridge": {
+    "now_running": [{"agent": "codex", "model": "fixture", "job_id": "queue-1", "started_at": "2026-07-24T12:00:00Z"}],
+    "recent": [{"agent": "codex", "model": "fixture", "outcome": "completed", "job_id": "queue-0", "duration_s": 5}],
+    "wait_s": 0
+  },
+  "deletions": {
+    "generated": "2026-07-24T12:00:00Z",
+    "rows": [{"repo": "fixture-repo", "outcome": "blocked", "cmd": "Remove-Item fixture", "cmd_hash": "fixture-1", "branch": "main", "agent": "main", "ts": "2026-07-24T12:00:00Z", "ts_epoch": 0}],
+    "repos": [{"repo": "fixture-repo", "capability": "v2"}]
+  }
+}
